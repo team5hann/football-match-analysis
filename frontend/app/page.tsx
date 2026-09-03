@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError, type Match } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import StatusBadge from "@/components/StatusBadge";
+import DeleteMatchButton from "@/components/DeleteMatchButton";
 
 export default function HomePage() {
   const [matches, setMatches] = useState<Match[] | null>(null);
@@ -57,10 +58,13 @@ export default function HomePage() {
       {matches && matches.length > 0 && (
         <ul className="divide-y divide-slate-800 rounded-lg border border-slate-800 bg-slate-900/40">
           {matches.map((match) => (
-            <li key={match.id}>
+            <li
+              key={match.id}
+              className="flex items-center justify-between gap-4 px-5 py-4 hover:bg-slate-800/50"
+            >
               <Link
                 href={`/matches/${match.id}`}
-                className="flex items-center justify-between gap-4 px-5 py-4 hover:bg-slate-800/50"
+                className="flex flex-1 items-center justify-between gap-4"
               >
                 <div>
                   <p className="font-medium text-slate-100">
@@ -72,6 +76,13 @@ export default function HomePage() {
                 </div>
                 <StatusBadge status={match.status} />
               </Link>
+              <DeleteMatchButton
+                matchId={match.id}
+                matchLabel={match.name || `Match #${match.id}`}
+                onDeleted={() =>
+                  setMatches((prev) => prev?.filter((m) => m.id !== match.id) ?? prev)
+                }
+              />
             </li>
           ))}
         </ul>

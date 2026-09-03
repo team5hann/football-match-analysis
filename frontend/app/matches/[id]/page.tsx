@@ -2,14 +2,17 @@
 
 import { use, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { api, ApiError, mediaUrl, type MatchDetail } from "@/lib/api";
 import { formatBytes, formatDate, formatDuration, resolutionLabel } from "@/lib/format";
 import StatusBadge from "@/components/StatusBadge";
 import VideoUploadPanel from "@/components/VideoUploadPanel";
+import DeleteMatchButton from "@/components/DeleteMatchButton";
 
 export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) {
   const { id } = use(params);
   const matchId = Number(id);
+  const router = useRouter();
 
   const [match, setMatch] = useState<MatchDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +61,14 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
             {match.competition || "No competition set"} · {formatDate(match.match_date)}
           </p>
         </div>
-        <StatusBadge status={match.status} />
+        <div className="flex items-center gap-3">
+          <StatusBadge status={match.status} />
+          <DeleteMatchButton
+            matchId={match.id}
+            matchLabel={match.name || `Match #${match.id}`}
+            onDeleted={() => router.push("/")}
+          />
+        </div>
       </div>
 
       {video ? (
