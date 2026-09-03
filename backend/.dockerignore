@@ -1,0 +1,7 @@
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+storage/videos/*
+!storage/videos/.gitkeep
+.env
