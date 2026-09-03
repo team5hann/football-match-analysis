@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# Backend local data
+backend/.env
+backend/storage/videos/*
+!backend/storage/videos/.gitkeep
+
+# Node / Next.js
+node_modules/
+frontend/.next/
+frontend/.env.local
+frontend/next-env.d.ts.bak
+
+# OS / editor
+.DS_Store
+*.swp
