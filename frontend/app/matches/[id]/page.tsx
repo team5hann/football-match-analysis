@@ -7,6 +7,7 @@ import { api, ApiError, mediaUrl, type MatchDetail } from "@/lib/api";
 import { formatBytes, formatDate, formatDuration, resolutionLabel } from "@/lib/format";
 import StatusBadge from "@/components/StatusBadge";
 import VideoUploadPanel from "@/components/VideoUploadPanel";
+import DeleteMatchButton from "@/components/DeleteMatchButton";
 
 export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) {
   const { id } = use(params);
@@ -15,8 +16,6 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
 
   const [match, setMatch] = useState<MatchDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [deleting, setDeleting] = useState(false);
   const [detection, setDetection] = useState<Awaited<ReturnType<typeof api.getDetectionStatus>> | null>(null);
   const [startingDetection, setStartingDetection] = useState(false);
   const [detectionError, setDetectionError] = useState<string | null>(null);
@@ -71,20 +70,6 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
     }
   }
 
-  async function handleDelete() {
-    if (!window.confirm("Delete this match?")) return;
-
-    setDeleteError(null);
-    setDeleting(true);
-    try {
-      await api.deleteMatch(matchId);
-      router.push("/");
-    } catch (err: unknown) {
-      setDeleteError(err instanceof ApiError ? err.message : "Failed to delete match");
-      setDeleting(false);
-    }
-  }
-
   if (error) {
     return (
       <div className="rounded-md border border-red-800 bg-red-950 px-4 py-3 text-sm text-red-200">
@@ -118,22 +103,13 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
         </div>
         <div className="flex items-center gap-3">
           <StatusBadge status={match.status} />
-          <button
-            type="button"
-            onClick={handleDelete}
-            disabled={deleting}
-            className="rounded-md border border-red-800 px-3 py-1.5 text-sm font-medium text-red-300 hover:border-red-600 hover:bg-red-950 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {deleting ? "Deleting…" : "Delete"}
-          </button>
+          <DeleteMatchButton
+            matchId={match.id}
+            matchLabel={match.name || `Match #${match.id}`}
+            onDeleted={() => router.push("/")}
+          />
         </div>
       </div>
-
-      {deleteError && (
-        <div className="mb-6 rounded-md border border-red-800 bg-red-950 px-4 py-3 text-sm text-red-200">
-          {deleteError}
-        </div>
-      )}
 
       {video ? (
         <div className="space-y-6">

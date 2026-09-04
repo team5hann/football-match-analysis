@@ -5,11 +5,11 @@ import { useEffect, useState } from "react";
 import { api, ApiError, type Match } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import StatusBadge from "@/components/StatusBadge";
+import DeleteMatchButton from "@/components/DeleteMatchButton";
 
 export default function HomePage() {
   const [matches, setMatches] = useState<Match[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [deletingMatchId, setDeletingMatchId] = useState<number | null>(null);
 
   useEffect(() => {
     api
@@ -20,23 +20,6 @@ export default function HomePage() {
       });
   }, []);
 
-  async function handleDelete(match: Match) {
-    const matchName = match.name || `Match #${match.id}`;
-    if (!window.confirm(`Delete ${matchName}?`)) return;
-
-    setError(null);
-    setDeletingMatchId(match.id);
-    try {
-      await api.deleteMatch(match.id);
-      setMatches((currentMatches) =>
-        currentMatches?.filter((currentMatch) => currentMatch.id !== match.id) ?? null
-      );
-    } catch (err: unknown) {
-      setError(err instanceof ApiError ? err.message : "Failed to delete match");
-    } finally {
-      setDeletingMatchId(null);
-    }
-  }
 
   return (
     <div>
@@ -91,14 +74,13 @@ export default function HomePage() {
                 </div>
               </Link>
               <StatusBadge status={match.status} />
-              <button
-                type="button"
-                onClick={() => handleDelete(match)}
-                disabled={deletingMatchId === match.id}
-                className="rounded-md border border-red-800 px-3 py-1.5 text-sm font-medium text-red-300 hover:border-red-600 hover:bg-red-950 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {deletingMatchId === match.id ? "Deleting…" : "Delete"}
-              </button>
+              <DeleteMatchButton
+                matchId={match.id}
+                matchLabel={match.name || `Match #${match.id}`}
+                onDeleted={() =>
+                  setMatches((prev) => prev?.filter((m) => m.id !== match.id) ?? prev)
+                }
+              />
             </li>
           ))}
         </ul>
