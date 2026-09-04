@@ -23,6 +23,7 @@ class Event(Base):
     team_id: Mapped[int | None] = mapped_column(ForeignKey("teams.id", ondelete="SET NULL"), nullable=True)
 
     event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    track_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     timestamp_seconds: Mapped[float] = mapped_column(Float, nullable=False)
 
     # 2D pitch coordinates (0-100 normalized), populated once pitch homography exists

@@ -32,3 +32,7 @@ class Match(Base):
     team_cluster_assignments: Mapped[list["TeamClusterAssignment"]] = relationship(
         back_populates="match", cascade="all, delete-orphan"
     )
+    analysis_summary: Mapped["MatchAnalysisSummary | None"] = relationship(
+        back_populates="match", cascade="all, delete-orphan", uselist=False
+    )
+    player_metrics: Mapped[list["PlayerMetric"]] = relationship(back_populates="match", cascade="all, delete-orphan")
