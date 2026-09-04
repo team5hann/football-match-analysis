@@ -56,7 +56,17 @@ export interface MatchAnalysis {
   home_possession_pct: number;
   away_possession_pct: number;
   players: PlayerMetric[];
-  events: Array<{ event_type: string; timestamp_seconds: number; track_id: number | null; description: string | null }>;
+  events: Array<{ id: number; event_type: string; timestamp_seconds: number; track_id: number | null; description: string | null }>;
+}
+
+export interface ClipEvent {
+  event_id: number;
+  event_type: "shot" | "pass" | "possession_loss";
+  timestamp_seconds: number;
+  xg: number | null;
+  confidence: number | null;
+  track_id: number | null;
+  description: string | null;
 }
 
 export interface Heatmap {
@@ -282,6 +292,11 @@ export const api = {
   startShotDetection: (matchId: number) =>
     request<ShotsSummary>(`/api/matches/${matchId}/shots`, { method: "POST" }),
   getShots: (matchId: number) => request<ShotsSummary>(`/api/matches/${matchId}/shots`),
+  getClips: (matchId: number, category?: ClipEvent["event_type"]) =>
+    request<ClipEvent[]>(`/api/matches/${matchId}/clips${category ? `?category=${category}` : ""}`),
+  eventClipUrl: (eventId: number, before = 3, after = 3) =>
+    `${API_URL}/api/events/${eventId}/clip?before_seconds=${before}&after_seconds=${after}`,
+  highlightsUrl: (matchId: number, limit = 8) => `${API_URL}/api/matches/${matchId}/highlights?limit=${limit}`,
   exportReportUrl: (matchId: number, format: ReportFormat) =>
     `${API_URL}/api/matches/${matchId}/export?format=${format}`,
 };

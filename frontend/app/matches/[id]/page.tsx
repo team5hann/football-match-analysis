@@ -38,6 +38,10 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
   const [tacticalAway, setTacticalAway] = useState<Awaited<ReturnType<typeof api.getTactical>> | null>(null);
   const [shots, setShots] = useState<Awaited<ReturnType<typeof api.getShots>> | null>(null);
   const [startingShots, setStartingShots] = useState(false);
+  const [clips, setClips] = useState<Awaited<ReturnType<typeof api.getClips>>>([]);
+  const [clipCategory, setClipCategory] = useState<"all" | "shot" | "pass" | "possession_loss">("all");
+  const [highlightsUrl, setHighlightsUrl] = useState<string | null>(null);
+  const [generatingHighlights, setGeneratingHighlights] = useState(false);
 
   const reload = useCallback(() => {
     api
@@ -64,6 +68,10 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
   useEffect(() => {
     api.getShots(matchId).then(setShots).catch(() => undefined);
   }, [matchId]);
+
+  useEffect(() => {
+    api.getClips(matchId).then(setClips).catch(() => setClips([]));
+  }, [matchId, shots, analysis]);
 
   useEffect(() => {
     const teams = tacticalTeam === "both" ? ["home", "away"] as const : [tacticalTeam];
@@ -189,6 +197,13 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
     } finally {
       setStartingShots(false);
     }
+  }
+
+  function generateHighlights() {
+    setGeneratingHighlights(true);
+    setHighlightsUrl(null);
+    setHighlightsUrl(api.highlightsUrl(matchId));
+    setGeneratingHighlights(false);
   }
 
   function setClusterRole(clusterId: number, role: "" | TeamClusterRole) {
@@ -467,20 +482,12 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
                 </div>
                 <div className="mt-5 space-y-2">
                   {shots.shots.map((shot) => (
-                    <button
-                      key={shot.id}
-                      type="button"
-                      onClick={() => {
-                        if (videoElement.current) {
-                          videoElement.current.currentTime = shot.timestamp_seconds;
-                          void videoElement.current.play();
-                        }
-                      }}
-                      className="flex w-full items-center justify-between rounded-md border border-slate-800 px-3 py-2 text-left text-sm text-slate-300 hover:bg-slate-800"
-                    >
-                      <span>{shot.team_role === "home" ? "Home" : "Away"} · track {shot.track_id ?? "—"}</span>
-                      <span className="text-slate-400">{shot.timestamp_seconds}s · xG {shot.xg.toFixed(2)}</span>
-                    </button>
+                    <div key={shot.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-800 px-3 py-2 text-sm text-slate-300">
+                      <button type="button" onClick={() => seekVideo(videoElement, shot.timestamp_seconds)} className="text-left hover:text-white">
+                        {shot.team_role === "home" ? "Home" : "Away"} · track {shot.track_id ?? "—"} · {shot.timestamp_seconds}s · xG {shot.xg.toFixed(2)}
+                      </button>
+                      <a href={api.eventClipUrl(shot.id)} download={`event-${shot.id}.mp4`} className="text-amber-300 hover:text-amber-200">Přehrát klip</a>
+                    </div>
                   ))}
                 </div>
               </>
@@ -488,6 +495,44 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
               <p className="mt-5 text-sm text-slate-500">No shots detected yet. Sparse ball detections may miss short shooting sequences.</p>
             )}
             {shots?.note && <p className="mt-3 text-xs text-slate-500">{shots.note}</p>}
+          </section>
+
+          <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="font-semibold text-slate-100">Clips</h2>
+                <p className="mt-1 text-sm text-slate-400">On-demand moments from stored events</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <select value={clipCategory} onChange={(event) => setClipCategory(event.target.value as typeof clipCategory)} className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-200">
+                  <option value="all">All categories</option>
+                  <option value="shot">Shots</option>
+                  <option value="pass">Passes</option>
+                  <option value="possession_loss">Possession losses</option>
+                </select>
+                <button type="button" onClick={generateHighlights} disabled={generatingHighlights || clips.length === 0} className="rounded-md bg-amber-400 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-300 disabled:opacity-60">
+                  {generatingHighlights ? "Generating…" : "Generovat highlights"}
+                </button>
+              </div>
+            </div>
+            {highlightsUrl && (
+              <div className="mt-5 space-y-3">
+                <video controls className="aspect-video w-full max-w-3xl" src={highlightsUrl} />
+                <a href={highlightsUrl} download={`match-${matchId}-highlights.mp4`} className="text-sm text-amber-300 hover:text-amber-200">Stáhnout highlights</a>
+              </div>
+            )}
+            <div className="mt-5 space-y-2">
+              {clips.filter((clip) => clipCategory === "all" || clip.event_type === clipCategory).map((clip) => (
+                <div key={clip.event_id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-800 px-3 py-2 text-sm text-slate-300">
+                  <button type="button" onClick={() => seekVideo(videoElement, clip.timestamp_seconds)} className="text-left hover:text-white">
+                    {clipLabel(clip.event_type)} · {clip.timestamp_seconds}s{clip.xg !== null ? ` · xG ${clip.xg.toFixed(2)}` : ""}
+                  </button>
+                  <a href={api.eventClipUrl(clip.event_id)} download={`event-${clip.event_id}.mp4`} className="text-amber-300 hover:text-amber-200">Přehrát / stáhnout</a>
+                </div>
+              ))}
+              {clips.filter((clip) => clipCategory === "all" || clip.event_type === clipCategory).length === 0 && <p className="text-sm text-slate-500">No clips available for this category.</p>}
+            </div>
+            {/* TODO: goals are unavailable because score detection is not implemented. */}
           </section>
 
           <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
@@ -704,20 +749,16 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
                   <div className="mt-5 border-t border-slate-800 pt-5">
                     <h3 className="font-medium text-slate-200">Key moments</h3>
                     <div className="mt-3 space-y-2">{analysis.events.map((event, index) => (
-                      <button
+                      <div
                         key={`${event.timestamp_seconds}-${index}`}
-                        type="button"
-                        onClick={() => {
-                          if (videoElement.current) {
-                            videoElement.current.currentTime = event.timestamp_seconds;
-                            void videoElement.current.play();
-                          }
-                        }}
-                        className="flex w-full items-center justify-between rounded-md border border-slate-800 px-3 py-2 text-left text-sm text-slate-300 hover:bg-slate-800"
+                        onClick={() => seekVideo(videoElement, event.timestamp_seconds)}
+                        role="button"
+                        tabIndex={0}
+                        className="flex w-full cursor-pointer items-center justify-between rounded-md border border-slate-800 px-3 py-2 text-left text-sm text-slate-300 hover:bg-slate-800"
                       >
                         <span>{event.event_type === "pass" ? "Pass" : "Possession loss"} · track {event.track_id ?? "—"}</span>
-                        <span className="text-slate-500">{event.timestamp_seconds}s</span>
-                      </button>
+                        <span className="flex items-center gap-3 text-slate-500"><span>{event.timestamp_seconds}s</span><a href={api.eventClipUrl(event.id)} download={`event-${event.id}.mp4`} onClick={(click) => click.stopPropagation()} className="text-amber-300">Klip</a></span>
+                      </div>
                     ))}</div>
                   </div>
                 )}
@@ -746,6 +787,17 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
       )}
     </div>
   );
+}
+
+function seekVideo(videoElement: React.RefObject<HTMLVideoElement | null>, timestamp: number) {
+  if (videoElement.current) {
+    videoElement.current.currentTime = timestamp;
+    void videoElement.current.play();
+  }
+}
+
+function clipLabel(eventType: "shot" | "pass" | "possession_loss") {
+  return eventType === "shot" ? "Shot" : eventType === "pass" ? "Pass" : "Possession loss";
 }
 
 function Stat({ label, value }: { label: string; value: string }) {
