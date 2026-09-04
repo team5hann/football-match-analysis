@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import get_settings
-from app.routers import matches, players, teams, videos
+from app.routers import clips, matches, players, teams, videos
 
 settings = get_settings()
 
@@ -21,6 +21,7 @@ app.include_router(teams.router)
 app.include_router(players.router)
 app.include_router(matches.router)
 app.include_router(videos.router)
+app.include_router(clips.router)
 
 app.mount("/media", StaticFiles(directory=settings.video_storage_dir), name="media")
 

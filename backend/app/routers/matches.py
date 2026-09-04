@@ -159,7 +159,7 @@ def get_analysis(match_id: int, db: Session = Depends(get_db)) -> AnalysisRead:
         away_possession_pct=summary.away_possession_pct if summary else 0,
         players=[PlayerMetricRead.model_validate(metric, from_attributes=True) for metric in metrics],
         events=[
-            {"event_type": event.event_type, "timestamp_seconds": event.timestamp_seconds, "track_id": event.track_id, "description": event.description}
+            {"id": event.id, "event_type": event.event_type, "timestamp_seconds": event.timestamp_seconds, "track_id": event.track_id, "description": event.description}
             for event in events
         ],
     )

@@ -139,7 +139,11 @@ pytest
   sparse sampling can miss short shooting sequences.
 - **Phase 6 (this repo)** — on-the-fly PDF, Excel, and CSV match reports built
   from stored match and analysis data.
-- **Phase 7+** — advanced xG, automatic clip and highlight generation, AI Coach.
+- **Phase 7 (this repo)** — on-demand event clips for shots, passes, and possession losses;
+  categorized clip browsing; and FFmpeg highlight compilation. Generated files are temporary
+  and removed after the response is sent. Goal events remain a TODO because score detection
+  is not available yet.
+- **Phase 8+** — advanced xG and AI Coach.
 
 See the original product specification (in the project's build brief) for the
 full long-term feature set.
