@@ -127,7 +127,14 @@ pytest
 - **Phase 5a (this repo)** — team/player movement heatmaps from stored
   detections. Heatmap coordinates are approximate camera coordinates, not a
   calibrated pitch projection.
-- **Phase 5+** — passing networks, tactical/formation analysis, xG,
+- **Phase 5b (this repo)** — Home/Away passing networks derived from stored pass
+  events and possession history. Nodes and edges use approximate camera
+  coordinates and sparse event data.
+- **Phase 5c (this repo)** — rough Home/Away formation estimates, team width,
+  depth, compactness, and average player positions from stored detections.
+  These metrics use whole-video camera coordinates and do not model formation
+  changes over time.
+- **Phase 5+** — xG,
   automatic clip and highlight generation, AI Coach, report export.
 
 See the original product specification (in the project's build brief) for the

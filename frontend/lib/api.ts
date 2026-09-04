@@ -79,6 +79,47 @@ export interface PlayerOption {
   detection_count: number;
 }
 
+export interface PassingNetworkNode {
+  track_id: number;
+  team_role: string;
+  jersey_number: number | null;
+  label: string;
+  average_x: number;
+  average_y: number;
+  detections_count: number;
+}
+
+export interface PassingNetworkTeam {
+  role: "home" | "away";
+  nodes: PassingNetworkNode[];
+  edges: Array<{ source_track_id: number; target_track_id: number; pass_count: number; source_x: number; source_y: number; target_x: number; target_y: number }>;
+}
+
+export interface PassingNetwork {
+  home: PassingNetworkTeam;
+  away: PassingNetworkTeam;
+  coordinate_note: string;
+}
+
+export interface TacticalPlayer {
+  track_id: number;
+  jersey_number: number | null;
+  label: string;
+  average_x: number;
+  average_y: number;
+  detections_count: number;
+}
+
+export interface TacticalAnalysis {
+  team_role: "home" | "away";
+  formation: string;
+  width: number;
+  depth: number;
+  compactness: number;
+  players: TacticalPlayer[];
+  coordinate_note: string;
+}
+
 export interface Team {
   id: number;
   name: string;
@@ -214,6 +255,9 @@ export const api = {
     return request<Heatmap>(`/api/matches/${matchId}/heatmap?${query.toString()}`);
   },
   getDetectedPlayers: (matchId: number) => request<PlayerOption[]>(`/api/matches/${matchId}/players`),
+  getPassingNetwork: (matchId: number) => request<PassingNetwork>(`/api/matches/${matchId}/passing-network`),
+  getTactical: (matchId: number, team: "home" | "away") =>
+    request<TacticalAnalysis>(`/api/matches/${matchId}/tactical?team=${team}`),
 };
 
 function uploadWithProgress(
