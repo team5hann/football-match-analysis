@@ -120,6 +120,25 @@ export interface TacticalAnalysis {
   coordinate_note: string;
 }
 
+export interface Shot {
+  id: number;
+  timestamp_seconds: number;
+  track_id: number | null;
+  team_role: string;
+  xg: number;
+  position_x: number | null;
+  position_y: number | null;
+  description: string | null;
+}
+
+export interface ShotsSummary {
+  status: string;
+  home_xg: number;
+  away_xg: number;
+  shots: Shot[];
+  note: string;
+}
+
 export interface Team {
   id: number;
   name: string;
@@ -258,6 +277,9 @@ export const api = {
   getPassingNetwork: (matchId: number) => request<PassingNetwork>(`/api/matches/${matchId}/passing-network`),
   getTactical: (matchId: number, team: "home" | "away") =>
     request<TacticalAnalysis>(`/api/matches/${matchId}/tactical?team=${team}`),
+  startShotDetection: (matchId: number) =>
+    request<ShotsSummary>(`/api/matches/${matchId}/shots`, { method: "POST" }),
+  getShots: (matchId: number) => request<ShotsSummary>(`/api/matches/${matchId}/shots`),
 };
 
 function uploadWithProgress(
