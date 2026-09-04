@@ -13,6 +13,8 @@ class VideoStatus(str, enum.Enum):
     UPLOADING = "uploading"
     UPLOADED = "uploaded"
     METADATA_EXTRACTED = "metadata_extracted"
+    PROCESSING = "processing"
+    ANALYZED = "analyzed"
     FAILED = "failed"
 
 

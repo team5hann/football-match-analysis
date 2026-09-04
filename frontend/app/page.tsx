@@ -9,6 +9,7 @@ import StatusBadge from "@/components/StatusBadge";
 export default function HomePage() {
   const [matches, setMatches] = useState<Match[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deletingMatchId, setDeletingMatchId] = useState<number | null>(null);
 
   useEffect(() => {
     api
@@ -18,6 +19,24 @@ export default function HomePage() {
         setError(err instanceof ApiError ? err.message : "Failed to load matches");
       });
   }, []);
+
+  async function handleDelete(match: Match) {
+    const matchName = match.name || `Match #${match.id}`;
+    if (!window.confirm(`Delete ${matchName}?`)) return;
+
+    setError(null);
+    setDeletingMatchId(match.id);
+    try {
+      await api.deleteMatch(match.id);
+      setMatches((currentMatches) =>
+        currentMatches?.filter((currentMatch) => currentMatch.id !== match.id) ?? null
+      );
+    } catch (err: unknown) {
+      setError(err instanceof ApiError ? err.message : "Failed to delete match");
+    } finally {
+      setDeletingMatchId(null);
+    }
+  }
 
   return (
     <div>
@@ -57,10 +76,10 @@ export default function HomePage() {
       {matches && matches.length > 0 && (
         <ul className="divide-y divide-slate-800 rounded-lg border border-slate-800 bg-slate-900/40">
           {matches.map((match) => (
-            <li key={match.id}>
+            <li key={match.id} className="flex items-center gap-4 px-5 py-4 hover:bg-slate-800/50">
               <Link
                 href={`/matches/${match.id}`}
-                className="flex items-center justify-between gap-4 px-5 py-4 hover:bg-slate-800/50"
+                className="min-w-0 flex-1"
               >
                 <div>
                   <p className="font-medium text-slate-100">
@@ -70,8 +89,16 @@ export default function HomePage() {
                     {match.competition || "No competition set"} · {formatDate(match.match_date)}
                   </p>
                 </div>
-                <StatusBadge status={match.status} />
               </Link>
+              <StatusBadge status={match.status} />
+              <button
+                type="button"
+                onClick={() => handleDelete(match)}
+                disabled={deletingMatchId === match.id}
+                className="rounded-md border border-red-800 px-3 py-1.5 text-sm font-medium text-red-300 hover:border-red-600 hover:bg-red-950 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {deletingMatchId === match.id ? "Deleting…" : "Delete"}
+              </button>
             </li>
           ))}
         </ul>

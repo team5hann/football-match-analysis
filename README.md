@@ -4,17 +4,16 @@ An AI-powered football match video analysis platform. Upload a match recording a
 (eventually) get automatic player/ball detection, event recognition, tactical
 statistics, heatmaps, auto-generated clips, and an AI coach — built up in phases.
 
-This repo currently implements **Phase 1: the application skeleton** — real video
-upload, real PostgreSQL storage, and a real video player. No computer vision yet;
-that starts in Phase 2.
+This repo currently implements **Phase 2: basic YOLOv8 detection** — real video
+upload, PostgreSQL storage, FFmpeg frame sampling, and per-frame player/ball
+detections visible in the match detail view.
 
 ## Tech stack
 
 - **Backend**: FastAPI (Python), SQLAlchemy, Alembic
 - **Database**: PostgreSQL
 - **Frontend**: Next.js (App Router, TypeScript, Tailwind CSS)
-- **Video processing**: FFmpeg / ffprobe (metadata extraction today; frame
-  extraction and CV pipeline land in later phases)
+- **Video processing**: FFmpeg / ffprobe and Ultralytics YOLOv8
 
 ## Project structure
 
@@ -22,10 +21,10 @@ that starts in Phase 2.
 backend/
   app/
     core/       # settings, DB session
-    models/     # SQLAlchemy models: Team, Player, Match, Video, Event, Clip
+    models/     # SQLAlchemy models: Team, Player, Match, Video, Detection, Event, Clip
     schemas/    # Pydantic request/response schemas
     routers/    # FastAPI routers: teams, players, matches, videos
-    services/   # video_processing.py — ffprobe metadata extraction
+    services/   # video_processing.py and detection.py — FFmpeg + YOLOv8
   alembic/      # DB migrations
   tests/        # pytest suite (full upload flow, validation)
 frontend/
@@ -42,6 +41,7 @@ docker-compose.yml
   (`pending` → `uploaded` → `processing` → `analyzed` / `failed`)
 - **videos** — one or more video files per match, with metadata extracted by
   ffprobe on upload (duration, resolution, fps, codecs, file size)
+- **detections** — sampled-frame player/ball bounding boxes, confidence, and timestamp
 - **events**, **clips** — schemas are defined now so later phases (event
   detection, auto-generated clips) don't need new migrations, but these
   tables are intentionally left empty until Phase 4/5
@@ -113,10 +113,10 @@ pytest
 
 ## Roadmap
 
-- **Phase 1 (this repo)** — upload, store, and play back match video; CRUD for
+- **Phase 1** — upload, store, and play back match video; CRUD for
   teams/players/matches; ffprobe metadata extraction.
-- **Phase 2** — YOLOv8 player/ball detection, ByteTrack tracking, basic pitch
-  detection, storing per-frame detections.
+- **Phase 2 (this repo)** — YOLOv8 player/ball detection sampled at one frame per
+  second, storing per-frame detections and showing counts in the match detail view.
 - **Phase 3** — team classification by kit color, jersey number OCR, manual
   player assignment, tracking ID → player identity linking.
 - **Phase 4** — possession, touches, distance/speed, and simple event
