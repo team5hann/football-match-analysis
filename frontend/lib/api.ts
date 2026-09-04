@@ -16,6 +16,7 @@ export interface Detection {
   bounding_box: { x: number; y: number; width: number; height: number };
   class: "player" | "ball";
   confidence: number;
+  track_id: number | null;
   team_color_cluster: number | null;
   dominant_rgb: number[] | null;
   jersey_number: number | null;
@@ -38,6 +39,24 @@ export interface TeamClusterAssignment {
   role: TeamClusterRole;
   team_id: number | null;
   detections_count: number;
+}
+
+export interface PlayerMetric {
+  track_id: number;
+  team_color_cluster: number | null;
+  jersey_number: number | null;
+  touches: number;
+  distance_meters: number;
+  average_speed_mps: number;
+  max_speed_mps: number;
+}
+
+export interface MatchAnalysis {
+  status: string;
+  home_possession_pct: number;
+  away_possession_pct: number;
+  players: PlayerMetric[];
+  events: Array<{ event_type: string; timestamp_seconds: number; track_id: number | null; description: string | null }>;
 }
 
 export interface Team {
@@ -165,6 +184,9 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ jersey_number: jerseyNumber }),
     }),
+  startAnalysis: (matchId: number) =>
+    request<MatchAnalysis>(`/api/matches/${matchId}/analysis`, { method: "POST" }),
+  getAnalysis: (matchId: number) => request<MatchAnalysis>(`/api/matches/${matchId}/analysis`),
 };
 
 function uploadWithProgress(

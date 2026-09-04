@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
@@ -7,6 +7,11 @@ from app.models.match import Match
 from app.models.detection import Detection
 from app.models.team_cluster import TeamClusterAssignment
 from app.models.video import Video
+from app.models.analysis import MatchAnalysisSummary, PlayerMetric
+from app.models.event import Event
+from app.models.enums import MatchStatus
+from app.schemas.analysis import AnalysisRead, PlayerMetricRead
+from app.services.analysis import run_analysis
 from app.schemas.match import MatchCreate, MatchDetail, MatchRead, MatchUpdate
 from app.schemas.team_cluster import TeamClusterAssignmentRead, TeamClusterAssignmentUpdate
 
@@ -113,3 +118,36 @@ def save_team_clusters(
         assignment.team_id = item.team_id
     db.commit()
     return list_team_clusters(match_id, db)
+
+
+@router.post("/{match_id}/analysis", response_model=AnalysisRead, status_code=202)
+def start_analysis(match_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)) -> AnalysisRead:
+    match = db.get(Match, match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Match not found")
+    if not db.scalar(select(Detection.id).join(Video, Detection.video_id == Video.id).where(Video.match_id == match_id)):
+        raise HTTPException(status_code=400, detail="Run player detection before analysis")
+    match.status = MatchStatus.PROCESSING
+    db.commit()
+    background_tasks.add_task(run_analysis, match_id)
+    return AnalysisRead(status="processing", home_possession_pct=0, away_possession_pct=0, players=[], events=[])
+
+
+@router.get("/{match_id}/analysis", response_model=AnalysisRead)
+def get_analysis(match_id: int, db: Session = Depends(get_db)) -> AnalysisRead:
+    match = db.get(Match, match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Match not found")
+    summary = db.scalar(select(MatchAnalysisSummary).where(MatchAnalysisSummary.match_id == match_id))
+    metrics = db.scalars(select(PlayerMetric).where(PlayerMetric.match_id == match_id).order_by(PlayerMetric.track_id)).all()
+    events = db.scalars(select(Event).where(Event.match_id == match_id, Event.event_type.in_(["pass", "possession_loss"])).order_by(Event.timestamp_seconds)).all()
+    return AnalysisRead(
+        status="analyzed" if summary else match.status.value if hasattr(match.status, "value") else match.status,
+        home_possession_pct=summary.home_possession_pct if summary else 0,
+        away_possession_pct=summary.away_possession_pct if summary else 0,
+        players=[PlayerMetricRead.model_validate(metric, from_attributes=True) for metric in metrics],
+        events=[
+            {"event_type": event.event_type, "timestamp_seconds": event.timestamp_seconds, "track_id": event.track_id, "description": event.description}
+            for event in events
+        ],
+    )

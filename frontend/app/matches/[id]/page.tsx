@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useCallback, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, ApiError, mediaUrl, type MatchDetail, type TeamClusterAssignment, type TeamClusterRole } from "@/lib/api";
@@ -22,6 +22,9 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
   const [startingEnrichment, setStartingEnrichment] = useState(false);
   const [clusterAssignments, setClusterAssignments] = useState<TeamClusterAssignment[]>([]);
   const [savingClusters, setSavingClusters] = useState(false);
+  const [analysis, setAnalysis] = useState<Awaited<ReturnType<typeof api.getAnalysis>> | null>(null);
+  const [startingAnalysis, setStartingAnalysis] = useState(false);
+  const videoElement = useRef<HTMLVideoElement>(null);
 
   const reload = useCallback(() => {
     api
@@ -38,6 +41,21 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
 
   useEffect(() => {
     api.getTeamClusters(matchId).then(setClusterAssignments).catch(() => undefined);
+  }, [matchId]);
+
+  useEffect(() => {
+    let active = true;
+    const loadAnalysis = () => {
+      api.getAnalysis(matchId).then((result) => {
+        if (active) setAnalysis(result);
+      }).catch(() => undefined);
+    };
+    loadAnalysis();
+    const interval = window.setInterval(loadAnalysis, 2000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
   }, [matchId]);
 
   const videoId = match?.videos[0]?.id;
@@ -87,6 +105,18 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
       setDetectionError(err instanceof ApiError ? err.message : "Failed to start color and OCR processing");
     } finally {
       setStartingEnrichment(false);
+    }
+  }
+
+  async function handleStartAnalysis() {
+    setStartingAnalysis(true);
+    setDetectionError(null);
+    try {
+      setAnalysis(await api.startAnalysis(matchId));
+    } catch (err: unknown) {
+      setDetectionError(err instanceof ApiError ? err.message : "Failed to start analysis");
+    } finally {
+      setStartingAnalysis(false);
     }
   }
 
@@ -178,6 +208,7 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
           <div className="overflow-hidden rounded-lg border border-slate-800 bg-black">
             <video
               controls
+              ref={videoElement}
               className="aspect-video w-full"
               src={mediaUrl(video.stream_url)}
               preload="metadata"
@@ -313,6 +344,74 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
                   ))}
                 </div>
               </div>
+            )}
+          </section>
+
+          <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="font-semibold text-slate-100">Match analysis</h2>
+                <p className="mt-1 text-sm text-slate-400">
+                  {analysis?.status === "processing" ? "Calculating from stored detections…" : "Possession, touches and movement estimates"}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleStartAnalysis}
+                disabled={startingAnalysis || detection?.status !== "analyzed" || analysis?.status === "processing"}
+                className="rounded-md bg-sky-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {startingAnalysis || analysis?.status === "processing" ? "Analyzing…" : "Analyze match"}
+              </button>
+            </div>
+
+            {analysis?.status === "analyzed" && (
+              <>
+                <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <Stat label="Home possession" value={`${analysis.home_possession_pct.toFixed(1)}%`} />
+                  <Stat label="Away possession" value={`${analysis.away_possession_pct.toFixed(1)}%`} />
+                  <Stat label="Events" value={String(analysis.events.length)} />
+                  <Stat label="Tracked players" value={String(analysis.players.length)} />
+                </div>
+                {analysis.players.length > 0 && (
+                  <div className="mt-5 overflow-x-auto">
+                    <table className="w-full text-left text-sm">
+                      <thead className="text-xs uppercase tracking-wide text-slate-500">
+                        <tr><th className="pb-2 font-medium">Player</th><th className="pb-2 font-medium">Touches</th><th className="pb-2 font-medium">Distance</th><th className="pb-2 font-medium">Avg / max speed</th></tr>
+                      </thead>
+                      <tbody>{analysis.players.map((player) => (
+                        <tr key={player.track_id} className="border-t border-slate-800 text-slate-300">
+                          <td className="py-2">#{player.jersey_number ?? "—"} · track {player.track_id}</td>
+                          <td className="py-2">{player.touches}</td>
+                          <td className="py-2">{player.distance_meters.toFixed(1)} m</td>
+                          <td className="py-2">{player.average_speed_mps.toFixed(1)} / {player.max_speed_mps.toFixed(1)} m/s</td>
+                        </tr>
+                      ))}</tbody>
+                    </table>
+                  </div>
+                )}
+                {analysis.events.length > 0 && (
+                  <div className="mt-5 border-t border-slate-800 pt-5">
+                    <h3 className="font-medium text-slate-200">Key moments</h3>
+                    <div className="mt-3 space-y-2">{analysis.events.map((event, index) => (
+                      <button
+                        key={`${event.timestamp_seconds}-${index}`}
+                        type="button"
+                        onClick={() => {
+                          if (videoElement.current) {
+                            videoElement.current.currentTime = event.timestamp_seconds;
+                            void videoElement.current.play();
+                          }
+                        }}
+                        className="flex w-full items-center justify-between rounded-md border border-slate-800 px-3 py-2 text-left text-sm text-slate-300 hover:bg-slate-800"
+                      >
+                        <span>{event.event_type === "pass" ? "Pass" : "Possession loss"} · track {event.track_id ?? "—"}</span>
+                        <span className="text-slate-500">{event.timestamp_seconds}s</span>
+                      </button>
+                    ))}</div>
+                  </div>
+                )}
+              </>
             )}
           </section>
 

@@ -4,9 +4,9 @@ An AI-powered football match video analysis platform. Upload a match recording a
 (eventually) get automatic player/ball detection, event recognition, tactical
 statistics, heatmaps, auto-generated clips, and an AI coach — built up in phases.
 
-This repo currently implements **Phase 3: player detection enrichment** — YOLOv8
-per-frame detections, kit-color clustering, CPU-only jersey-number OCR, and
-manual team/jersey corrections in the match detail view.
+This repo currently implements **Phase 4: basic match analysis** — YOLOv8 per-frame
+detections, kit-color clustering, CPU-only jersey-number OCR, sparse tracking,
+possession, movement estimates, and basic pass/loss events.
 
 ## Tech stack
 
@@ -43,9 +43,10 @@ docker-compose.yml
   ffprobe on upload (duration, resolution, fps, codecs, file size)
 - **detections** — sampled-frame player/ball bounding boxes, confidence, and timestamp
 - **team_cluster_assignments** — manual Home/Away/referee labels for color clusters
-- **events**, **clips** — schemas are defined now so later phases (event
-  detection, auto-generated clips) don't need new migrations, but these
-  tables are intentionally left empty until Phase 4/5
+- **match_analysis_summaries**, **player_metrics** — estimated possession and
+  track-level touches, distance, and speed
+- **events** — estimated pass and possession-loss moments; shot detection is
+  intentionally deferred until pitch/goal geometry exists
 
 ## Running with Docker Compose
 
@@ -120,9 +121,9 @@ pytest
   second, storing per-frame detections and showing counts in the match detail view.
 - **Phase 3 (this repo)** — torso RGB clustering, CPU EasyOCR jersey numbers, and
   manual cluster/team and jersey corrections.
-- **Phase 4** — possession, touches, distance/speed, and simple event
-  detection (pass, loss of possession, shot), all linked back to video
-  timestamps.
+- **Phase 4 (this repo)** — possession, touches, rough distance/speed, sparse
+  IoU tracking, and pass/loss events from stored detections. Distances use a
+  rough 105x68 m scale without homography; shot detection remains a TODO.
 - **Phase 5+** — heatmaps, passing networks, tactical/formation analysis, xG,
   automatic clip and highlight generation, AI Coach, report export.
 
