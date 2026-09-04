@@ -33,3 +33,4 @@ class Video(Base):
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     match: Mapped["Match"] = relationship(back_populates="videos")
+    detections: Mapped[list["Detection"]] = relationship(back_populates="video", cascade="all, delete-orphan")

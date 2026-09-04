@@ -9,6 +9,7 @@ __pycache__/
 backend/.env
 backend/storage/videos/*
 !backend/storage/videos/.gitkeep
+test-videos/
 
 # Node / Next.js
 node_modules/

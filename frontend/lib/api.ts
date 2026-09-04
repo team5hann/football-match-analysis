@@ -1,7 +1,30 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 export type MatchStatus = "pending" | "uploaded" | "processing" | "analyzed" | "failed";
-export type VideoStatus = "uploading" | "uploaded" | "metadata_extracted" | "failed";
+export type VideoStatus =
+  | "uploading"
+  | "uploaded"
+  | "metadata_extracted"
+  | "processing"
+  | "analyzed"
+  | "failed";
+
+export interface Detection {
+  id: number;
+  video_id: number;
+  frame_timestamp: number;
+  bounding_box: { x: number; y: number; width: number; height: number };
+  class: "player" | "ball";
+  confidence: number;
+  created_at: string;
+}
+
+export interface DetectionStatus {
+  video_id: number;
+  status: VideoStatus;
+  detections_count: number;
+  detections: Detection[];
+}
 
 export interface Team {
   id: number;
@@ -110,6 +133,10 @@ export const api = {
 
   uploadVideo: (matchId: number, file: File, onProgress?: (pct: number) => void) =>
     uploadWithProgress(matchId, file, onProgress),
+  startDetection: (videoId: number) =>
+    request<DetectionStatus>(`/api/videos/${videoId}/detection`, { method: "POST" }),
+  getDetectionStatus: (videoId: number) =>
+    request<DetectionStatus>(`/api/videos/${videoId}/detection`),
 };
 
 function uploadWithProgress(

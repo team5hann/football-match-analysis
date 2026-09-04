@@ -20,6 +20,7 @@ export default function HomePage() {
       });
   }, []);
 
+
   return (
     <div>
       <div className="mb-6 flex items-center justify-between">
@@ -58,13 +59,10 @@ export default function HomePage() {
       {matches && matches.length > 0 && (
         <ul className="divide-y divide-slate-800 rounded-lg border border-slate-800 bg-slate-900/40">
           {matches.map((match) => (
-            <li
-              key={match.id}
-              className="flex items-center justify-between gap-4 px-5 py-4 hover:bg-slate-800/50"
-            >
+            <li key={match.id} className="flex items-center gap-4 px-5 py-4 hover:bg-slate-800/50">
               <Link
                 href={`/matches/${match.id}`}
-                className="flex flex-1 items-center justify-between gap-4"
+                className="min-w-0 flex-1"
               >
                 <div>
                   <p className="font-medium text-slate-100">
@@ -74,8 +72,8 @@ export default function HomePage() {
                     {match.competition || "No competition set"} · {formatDate(match.match_date)}
                   </p>
                 </div>
-                <StatusBadge status={match.status} />
               </Link>
+              <StatusBadge status={match.status} />
               <DeleteMatchButton
                 matchId={match.id}
                 matchLabel={match.name || `Match #${match.id}`}

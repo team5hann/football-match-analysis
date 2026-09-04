@@ -1,7 +1,7 @@
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -10,12 +10,18 @@ from app.models.enums import MatchStatus, VideoStatus
 from app.models.match import Match
 from app.models.video import Video
 from app.schemas.video import VideoRead
+from app.schemas.detection import DetectionRead, DetectionStatus
+from app.services.detection import list_detections, run_detection
 from app.services.video_processing import FFprobeError, extract_video_metadata
 
 router = APIRouter(tags=["videos"])
 settings = get_settings()
 
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv"}
+
+
+def _status_value(status: VideoStatus | str) -> str:
+    return getattr(status, "value", status)
 
 
 @router.post("/api/matches/{match_id}/video", response_model=VideoRead, status_code=201)
@@ -95,6 +101,34 @@ def get_video(video_id: int, db: Session = Depends(get_db)) -> Video:
     if video is None:
         raise HTTPException(status_code=404, detail="Video not found")
     return video
+
+
+@router.post("/api/videos/{video_id}/detection", response_model=DetectionStatus, status_code=202)
+def start_detection(video_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)) -> DetectionStatus:
+    video = db.get(Video, video_id)
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found")
+    if video.status == VideoStatus.PROCESSING:
+        raise HTTPException(status_code=409, detail="Detection is already running")
+    video.status = VideoStatus.PROCESSING
+    video.match.status = MatchStatus.PROCESSING
+    db.commit()
+    background_tasks.add_task(run_detection, video_id)
+    return DetectionStatus(video_id=video_id, status=_status_value(video.status), detections_count=0, detections=[])
+
+
+@router.get("/api/videos/{video_id}/detection", response_model=DetectionStatus)
+def get_detection_status(video_id: int, db: Session = Depends(get_db)) -> DetectionStatus:
+    video = db.get(Video, video_id)
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found")
+    detections = list_detections(video_id, db)
+    return DetectionStatus(
+        video_id=video_id,
+        status=_status_value(video.status),
+        detections_count=len(detections),
+        detections=[DetectionRead.model_validate(detection) for detection in detections],
+    )
 
 
 @router.delete("/api/videos/{video_id}", status_code=204)

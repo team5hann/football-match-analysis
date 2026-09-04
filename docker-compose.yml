@@ -25,7 +25,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg2://football:football@db:5432/football_analysis
       VIDEO_STORAGE_DIR: /app/storage/videos
-      CORS_ORIGINS: http://localhost:3000
+      CORS_ORIGINS: https://glowing-goggles-wrr499vxq54gcg6wr-3000.app.github.dev
     volumes:
       - video_storage:/app/storage/videos
     ports:
@@ -35,12 +35,12 @@ services:
     build:
       context: ./frontend
       args:
-        NEXT_PUBLIC_API_URL: http://localhost:8000
+        NEXT_PUBLIC_API_URL: https://glowing-goggles-wrr499vxq54gcg6wr-8000.app.github.dev
     restart: unless-stopped
     depends_on:
       - backend
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_API_URL: https://glowing-goggles-wrr499vxq54gcg6wr-8000.app.github.dev
     ports:
       - "3000:3000"
 
