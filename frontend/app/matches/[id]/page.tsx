@@ -3,7 +3,7 @@
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { api, ApiError, mediaUrl, type MatchDetail, type PlayerOption, type TeamClusterAssignment, type TeamClusterRole } from "@/lib/api";
+import { api, ApiError, mediaUrl, type MatchDetail, type PlayerOption, type ReportFormat, type TeamClusterAssignment, type TeamClusterRole } from "@/lib/api";
 import { formatBytes, formatDate, formatDuration, resolutionLabel } from "@/lib/format";
 import StatusBadge from "@/components/StatusBadge";
 import VideoUploadPanel from "@/components/VideoUploadPanel";
@@ -233,6 +233,15 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
     }
   }
 
+  function downloadReport(format: ReportFormat) {
+    const link = document.createElement("a");
+    link.href = api.exportReportUrl(matchId, format);
+    link.download = `match-${matchId}-report.${format}`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+
   if (error) {
     return (
       <div className="rounded-md border border-red-800 bg-red-950 px-4 py-3 text-sm text-red-200">
@@ -416,6 +425,23 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
                 </div>
               </div>
             )}
+          </section>
+
+          <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
+            <h2 className="font-semibold text-slate-100">Export report</h2>
+            <p className="mt-1 text-sm text-slate-400">Download the current match data without reprocessing the video.</p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {(["pdf", "xlsx", "csv"] as const).map((format) => (
+                <button
+                  key={format}
+                  type="button"
+                  onClick={() => downloadReport(format)}
+                  className="rounded-md border border-slate-600 px-3 py-2 text-sm font-medium uppercase text-slate-200 hover:bg-slate-800"
+                >
+                  {format === "xlsx" ? "Excel" : format.toUpperCase()}
+                </button>
+              ))}
+            </div>
           </section>
 
           <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">

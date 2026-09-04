@@ -137,8 +137,9 @@ pytest
 - **Phase 5d (this repo)** — heuristic shot detection and distance/angle xG
   estimates from stored sparse ball detections. Shot results are approximate;
   sparse sampling can miss short shooting sequences.
-- **Phase 5+** — advanced xG,
-  automatic clip and highlight generation, AI Coach, report export.
+- **Phase 6 (this repo)** — on-the-fly PDF, Excel, and CSV match reports built
+  from stored match and analysis data.
+- **Phase 7+** — advanced xG, automatic clip and highlight generation, AI Coach.
 
 See the original product specification (in the project's build brief) for the
 full long-term feature set.

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi.responses import Response
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, joinedload
 
@@ -24,6 +25,7 @@ from app.schemas.shots import ShotRead, ShotsRead
 from app.services.shots import detect_shots
 from app.schemas.player_option import PlayerOptionRead
 from app.services.player_options import build_player_options
+from app.services.report import build_report_data, render_csv, render_pdf, render_xlsx
 
 router = APIRouter(prefix="/api/matches", tags=["matches"])
 
@@ -389,3 +391,51 @@ def get_shots(match_id: int, db: Session = Depends(get_db)) -> ShotsRead:
     home_xg = round(sum(item.xg for item in result if item.team_role == "home"), 4)
     away_xg = round(sum(item.xg for item in result if item.team_role == "away"), 4)
     return ShotsRead(status="analyzed" if shots else (match.status.value if hasattr(match.status, "value") else match.status), home_xg=home_xg, away_xg=away_xg, shots=result, note="Shot detection is a rough heuristic from sparse ball detections; many shots may be missed.")
+
+
+@router.get("/{match_id}/export")
+def export_match_report(match_id: int, format: str = Query("pdf", pattern="^(pdf|xlsx|csv)$"), db: Session = Depends(get_db)) -> Response:
+    match = db.get(Match, match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Match not found")
+
+    video = db.scalar(select(Video).where(Video.match_id == match_id).order_by(Video.id))
+    detections = []
+    if video:
+        detections = db.scalars(select(Detection).where(Detection.video_id == video.id).order_by(Detection.frame_timestamp, Detection.id)).all()
+    cluster_roles = {item.cluster_id: item.role for item in match.team_cluster_assignments}
+    records = [
+        {"class": item.class_name, "track_id": item.track_id, "timestamp": item.frame_timestamp, "box": item.bounding_box, "cluster": item.team_color_cluster, "jersey_number": item.jersey_number}
+        for item in detections
+    ]
+    tactical = {}
+    network = {"home": {"edges": []}, "away": {"edges": []}}
+    if video:
+        tactical = {
+            role: calculate_tactical(records, role, video.width or 1, video.height or 1, cluster_roles)
+            for role in ("home", "away")
+        }
+        event_records = db.scalars(select(Event).where(Event.match_id == match_id, Event.event_type == "pass").order_by(Event.timestamp_seconds, Event.id)).all()
+        network = build_passing_network(
+            records,
+            [{"track_id": event.track_id, "timestamp": event.timestamp_seconds} for event in event_records],
+            video.width or 1,
+            video.height or 1,
+            cluster_roles,
+        )
+    summary = db.scalar(select(MatchAnalysisSummary).where(MatchAnalysisSummary.match_id == match_id))
+    metrics = db.scalars(select(PlayerMetric).where(PlayerMetric.match_id == match_id).order_by(PlayerMetric.track_id)).all()
+    events = db.scalars(select(Event).where(Event.match_id == match_id, Event.event_type.in_(["pass", "possession_loss"])).order_by(Event.timestamp_seconds, Event.id)).all()
+    shots = db.scalars(select(Event).where(Event.match_id == match_id, Event.event_type == "shot").order_by(Event.timestamp_seconds, Event.id)).all()
+    role_by_track = {}
+    for detection in detections:
+        if detection.track_id is not None:
+            role_by_track.setdefault(detection.track_id, []).append(cluster_roles.get(detection.team_color_cluster, "unknown"))
+    shot_rows = [
+        {"timestamp_seconds": shot.timestamp_seconds, "track_id": shot.track_id, "team_role": max(role_by_track.get(shot.track_id, ["unknown"]), key=role_by_track.get(shot.track_id, ["unknown"]).count), "xg": shot.xg or 0}
+        for shot in shots
+    ]
+    data = build_report_data(match, summary, metrics, events, shot_rows, tactical, network, cluster_roles)
+    renderers = {"pdf": (render_pdf, "application/pdf", "pdf"), "xlsx": (render_xlsx, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"), "csv": (render_csv, "text/csv; charset=utf-8", "csv")}
+    renderer, content_type, extension = renderers[format]
+    return Response(renderer(data), media_type=content_type, headers={"Content-Disposition": f'attachment; filename="match-{match_id}-report.{extension}"'})

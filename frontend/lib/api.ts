@@ -139,6 +139,8 @@ export interface ShotsSummary {
   note: string;
 }
 
+export type ReportFormat = "pdf" | "xlsx" | "csv";
+
 export interface Team {
   id: number;
   name: string;
@@ -280,6 +282,8 @@ export const api = {
   startShotDetection: (matchId: number) =>
     request<ShotsSummary>(`/api/matches/${matchId}/shots`, { method: "POST" }),
   getShots: (matchId: number) => request<ShotsSummary>(`/api/matches/${matchId}/shots`),
+  exportReportUrl: (matchId: number, format: ReportFormat) =>
+    `${API_URL}/api/matches/${matchId}/export?format=${format}`,
 };
 
 function uploadWithProgress(
