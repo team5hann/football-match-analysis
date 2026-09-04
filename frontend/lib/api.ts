@@ -59,6 +59,26 @@ export interface MatchAnalysis {
   events: Array<{ event_type: string; timestamp_seconds: number; track_id: number | null; description: string | null }>;
 }
 
+export interface Heatmap {
+  mode: "team" | "player";
+  track_id: number | null;
+  team_color_cluster: number | null;
+  grid_width: number;
+  grid_height: number;
+  grid: number[][];
+  total_observations: number;
+  coordinate_note: string;
+}
+
+export interface PlayerOption {
+  track_id: number;
+  team_color_cluster: number | null;
+  team_role: string;
+  jersey_number: number | null;
+  label: string;
+  detection_count: number;
+}
+
 export interface Team {
   id: number;
   name: string;
@@ -187,6 +207,13 @@ export const api = {
   startAnalysis: (matchId: number) =>
     request<MatchAnalysis>(`/api/matches/${matchId}/analysis`, { method: "POST" }),
   getAnalysis: (matchId: number) => request<MatchAnalysis>(`/api/matches/${matchId}/analysis`),
+  getHeatmap: (matchId: number, params: { mode: "team" | "player"; track_id?: number; team_color_cluster?: number }) => {
+    const query = new URLSearchParams({ mode: params.mode });
+    if (params.track_id !== undefined) query.set("track_id", String(params.track_id));
+    if (params.team_color_cluster !== undefined) query.set("team_color_cluster", String(params.team_color_cluster));
+    return request<Heatmap>(`/api/matches/${matchId}/heatmap?${query.toString()}`);
+  },
+  getDetectedPlayers: (matchId: number) => request<PlayerOption[]>(`/api/matches/${matchId}/players`),
 };
 
 function uploadWithProgress(

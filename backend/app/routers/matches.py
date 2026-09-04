@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
@@ -14,6 +14,10 @@ from app.schemas.analysis import AnalysisRead, PlayerMetricRead
 from app.services.analysis import run_analysis
 from app.schemas.match import MatchCreate, MatchDetail, MatchRead, MatchUpdate
 from app.schemas.team_cluster import TeamClusterAssignmentRead, TeamClusterAssignmentUpdate
+from app.schemas.heatmap import HeatmapRead
+from app.services.heatmap import build_heatmap
+from app.schemas.player_option import PlayerOptionRead
+from app.services.player_options import build_player_options
 
 router = APIRouter(prefix="/api/matches", tags=["matches"])
 
@@ -151,3 +155,73 @@ def get_analysis(match_id: int, db: Session = Depends(get_db)) -> AnalysisRead:
             for event in events
         ],
     )
+
+
+@router.get("/{match_id}/heatmap", response_model=HeatmapRead)
+def get_heatmap(
+    match_id: int,
+    mode: str = Query("team", pattern="^(team|player)$"),
+    track_id: int | None = Query(None, ge=1),
+    team_color_cluster: int | None = Query(None, ge=0, le=2),
+    grid_width: int = Query(20, ge=1, le=100),
+    grid_height: int = Query(12, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> HeatmapRead:
+    match = db.get(Match, match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Match not found")
+    if mode == "player" and track_id is None:
+        raise HTTPException(status_code=400, detail="track_id is required for player heatmaps")
+    if mode == "team" and team_color_cluster is None:
+        raise HTTPException(status_code=400, detail="team_color_cluster is required for team heatmaps")
+
+    query = (
+        select(Detection, Video.width, Video.height)
+        .join(Video, Detection.video_id == Video.id)
+        .where(Video.match_id == match_id, Detection.class_name == "player")
+    )
+    if mode == "player":
+        query = query.where(Detection.track_id == track_id)
+    else:
+        query = query.where(Detection.team_color_cluster == team_color_cluster)
+    rows = db.execute(query).all()
+    detections = [
+        {"bounding_box": detection.bounding_box}
+        for detection, _width, _height in rows
+    ]
+    width = next((width for _detection, width, _height in rows if width), 1)
+    height = next((height for _detection, _width, height in rows if height), 1)
+    grid = build_heatmap(detections, width, height, grid_width, grid_height)
+    return HeatmapRead(
+        mode=mode,
+        track_id=track_id,
+        team_color_cluster=team_color_cluster,
+        grid_width=grid_width,
+        grid_height=grid_height,
+        grid=grid,
+        total_observations=sum(sum(row) for row in grid),
+        coordinate_note="Approximate camera coordinates from bounding-box centers; not calibrated to the real pitch.",
+    )
+
+
+@router.get("/{match_id}/players", response_model=list[PlayerOptionRead])
+def list_detected_players(match_id: int, db: Session = Depends(get_db)) -> list[PlayerOptionRead]:
+    match = db.get(Match, match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Match not found")
+    detections = db.execute(
+        select(Detection, Video.id)
+        .join(Video, Detection.video_id == Video.id)
+        .where(Video.match_id == match_id, Detection.class_name == "player", Detection.track_id.is_not(None))
+    ).all()
+    cluster_roles = {item.cluster_id: item.role for item in match.team_cluster_assignments}
+    records = [
+        {
+            "class": detection.class_name,
+            "track_id": detection.track_id,
+            "team_color_cluster": detection.team_color_cluster,
+            "jersey_number": detection.jersey_number,
+        }
+        for detection, _video_id in detections
+    ]
+    return [PlayerOptionRead.model_validate(option) for option in build_player_options(records, cluster_roles)]

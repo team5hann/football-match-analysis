@@ -124,7 +124,10 @@ pytest
 - **Phase 4 (this repo)** — possession, touches, rough distance/speed, sparse
   IoU tracking, and pass/loss events from stored detections. Distances use a
   rough 105x68 m scale without homography; shot detection remains a TODO.
-- **Phase 5+** — heatmaps, passing networks, tactical/formation analysis, xG,
+- **Phase 5a (this repo)** — team/player movement heatmaps from stored
+  detections. Heatmap coordinates are approximate camera coordinates, not a
+  calibrated pitch projection.
+- **Phase 5+** — passing networks, tactical/formation analysis, xG,
   automatic clip and highlight generation, AI Coach, report export.
 
 See the original product specification (in the project's build brief) for the

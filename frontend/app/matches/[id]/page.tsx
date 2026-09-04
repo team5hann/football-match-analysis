@@ -3,7 +3,7 @@
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { api, ApiError, mediaUrl, type MatchDetail, type TeamClusterAssignment, type TeamClusterRole } from "@/lib/api";
+import { api, ApiError, mediaUrl, type MatchDetail, type PlayerOption, type TeamClusterAssignment, type TeamClusterRole } from "@/lib/api";
 import { formatBytes, formatDate, formatDuration, resolutionLabel } from "@/lib/format";
 import StatusBadge from "@/components/StatusBadge";
 import VideoUploadPanel from "@/components/VideoUploadPanel";
@@ -25,6 +25,12 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
   const [analysis, setAnalysis] = useState<Awaited<ReturnType<typeof api.getAnalysis>> | null>(null);
   const [startingAnalysis, setStartingAnalysis] = useState(false);
   const videoElement = useRef<HTMLVideoElement>(null);
+  const [heatmapMode, setHeatmapMode] = useState<"team" | "player">("team");
+  const [heatmapTeam, setHeatmapTeam] = useState<"home" | "away">("home");
+  const [heatmapTrack, setHeatmapTrack] = useState<number | null>(null);
+  const [heatmap, setHeatmap] = useState<Awaited<ReturnType<typeof api.getHeatmap>> | null>(null);
+  const [heatmapError, setHeatmapError] = useState<string | null>(null);
+  const [playerOptions, setPlayerOptions] = useState<PlayerOption[]>([]);
 
   const reload = useCallback(() => {
     api
@@ -41,7 +47,27 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
 
   useEffect(() => {
     api.getTeamClusters(matchId).then(setClusterAssignments).catch(() => undefined);
+    api.getDetectedPlayers(matchId).then(setPlayerOptions).catch(() => undefined);
   }, [matchId]);
+
+  useEffect(() => {
+    if (heatmapMode === "team") {
+      const cluster = clusterAssignments.find((item) => item.role === heatmapTeam)?.cluster_id;
+      if (cluster === undefined) {
+        return;
+      }
+      api.getHeatmap(matchId, { mode: "team", team_color_cluster: cluster })
+        .then(setHeatmap)
+        .catch(() => setHeatmapError("No heatmap data available for this team"));
+      return;
+    }
+    if (heatmapTrack === null) {
+      return;
+    }
+    api.getHeatmap(matchId, { mode: "player", track_id: heatmapTrack })
+      .then(setHeatmap)
+      .catch(() => setHeatmapError("No heatmap data available for this player"));
+  }, [clusterAssignments, heatmapMode, heatmapTeam, heatmapTrack, matchId]);
 
   useEffect(() => {
     let active = true;
@@ -344,6 +370,83 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
                   ))}
                 </div>
               </div>
+            )}
+          </section>
+
+          <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="font-semibold text-slate-100">Heatmaps</h2>
+                <p className="mt-1 text-sm text-slate-400">Movement occupancy from stored player detections</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <select
+                  value={heatmapMode}
+                  onChange={(event) => setHeatmapMode(event.target.value as "team" | "player")}
+                  className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-200"
+                >
+                  <option value="team">Team</option>
+                  <option value="player">Player</option>
+                </select>
+                {heatmapMode === "team" ? (
+                  <select
+                    value={heatmapTeam}
+                    onChange={(event) => setHeatmapTeam(event.target.value as "home" | "away")}
+                    className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-200"
+                  >
+                    <option value="home">Home</option>
+                    <option value="away">Away</option>
+                  </select>
+                ) : (
+                  <select
+                    value={heatmapTrack ?? ""}
+                    onChange={(event) => setHeatmapTrack(event.target.value ? Number(event.target.value) : null)}
+                    className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-200"
+                  >
+                    <option value="">Select track</option>
+                    {(["home", "away", "referee", "unknown"] as const).map((role) => {
+                      const players = playerOptions.filter((player) => player.team_role === role);
+                      if (players.length === 0) return null;
+                      return (
+                        <optgroup key={role} label={role[0].toUpperCase() + role.slice(1)}>
+                          {players.map((player) => (
+                            <option key={player.track_id} value={player.track_id}>
+                              {player.jersey_number !== null ? `#${player.jersey_number}` : `Unknown #${player.track_id}`}
+                            </option>
+                          ))}
+                        </optgroup>
+                      );
+                    })}
+                  </select>
+                )}
+              </div>
+            </div>
+            {heatmapError && <p className="mt-3 text-sm text-amber-300">{heatmapError}</p>}
+            {heatmap && (heatmapMode === "team"
+              ? heatmapTeam === (clusterAssignments.find((item) => item.cluster_id === heatmap.team_color_cluster)?.role ?? "")
+              : heatmapTrack === heatmap.track_id) ? (
+              <div className="mt-5">
+                <div
+                  className="grid aspect-[5/3] w-full max-w-3xl overflow-hidden border border-slate-600 bg-slate-950"
+                  style={{ gridTemplateColumns: `repeat(${heatmap.grid_width}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${heatmap.grid_height}, minmax(0, 1fr))` }}
+                >
+                  {heatmap.grid.flatMap((row, rowIndex) => row.map((value, columnIndex) => {
+                    const maxValue = Math.max(...heatmap.grid.flat(), 1);
+                    const intensity = value / maxValue;
+                    return (
+                      <div
+                        key={`${rowIndex}-${columnIndex}`}
+                        title={`${value} observations`}
+                        className="border border-slate-900/40"
+                        style={{ backgroundColor: `rgba(16, 185, 129, ${0.08 + intensity * 0.92})` }}
+                      />
+                    );
+                  }))}
+                </div>
+                <p className="mt-3 text-xs text-slate-500">{heatmap.total_observations} observations · {heatmap.coordinate_note}</p>
+              </div>
+            ) : (
+              <p className="mt-5 text-sm text-slate-500">Run analysis and assign Home/Away clusters to view this heatmap.</p>
             )}
           </section>
 
