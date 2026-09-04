@@ -16,6 +16,10 @@ from app.schemas.match import MatchCreate, MatchDetail, MatchRead, MatchUpdate
 from app.schemas.team_cluster import TeamClusterAssignmentRead, TeamClusterAssignmentUpdate
 from app.schemas.heatmap import HeatmapRead
 from app.services.heatmap import build_heatmap
+from app.schemas.passing_network import PassingNetworkRead
+from app.services.passing_network import build_passing_network
+from app.schemas.tactical import TacticalRead, TacticalPlayerRead
+from app.services.tactical import calculate_tactical
 from app.schemas.player_option import PlayerOptionRead
 from app.services.player_options import build_player_options
 
@@ -225,3 +229,64 @@ def list_detected_players(match_id: int, db: Session = Depends(get_db)) -> list[
         for detection, _video_id in detections
     ]
     return [PlayerOptionRead.model_validate(option) for option in build_player_options(records, cluster_roles)]
+
+
+@router.get("/{match_id}/passing-network", response_model=PassingNetworkRead)
+def get_passing_network(match_id: int, db: Session = Depends(get_db)) -> PassingNetworkRead:
+    match = db.get(Match, match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Match not found")
+    video = db.scalar(select(Video).where(Video.match_id == match_id).order_by(Video.id))
+    if video is None:
+        raise HTTPException(status_code=400, detail="No video found")
+    detections = db.scalars(
+        select(Detection).where(Detection.video_id == video.id).order_by(Detection.frame_timestamp, Detection.id)
+    ).all()
+    events = db.scalars(
+        select(Event).where(Event.match_id == match_id, Event.event_type == "pass").order_by(Event.timestamp_seconds, Event.id)
+    ).all()
+    cluster_roles = {item.cluster_id: item.role for item in match.team_cluster_assignments}
+    records = [
+        {"class": item.class_name, "track_id": item.track_id, "timestamp": item.frame_timestamp, "box": item.bounding_box, "cluster": item.team_color_cluster, "jersey_number": item.jersey_number}
+        for item in detections
+    ]
+    event_records = [{"track_id": event.track_id, "timestamp": event.timestamp_seconds} for event in events]
+    result = build_passing_network(records, event_records, video.width or 1, video.height or 1, cluster_roles)
+    return PassingNetworkRead(
+        home=result["home"],
+        away=result["away"],
+        coordinate_note="Approximate camera coordinates from detection box centers; not calibrated to the real pitch.",
+    )
+
+
+@router.get("/{match_id}/tactical", response_model=TacticalRead)
+def get_tactical_analysis(
+    match_id: int,
+    team: str = Query("home", pattern="^(home|away)$"),
+    db: Session = Depends(get_db),
+) -> TacticalRead:
+    match = db.get(Match, match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Match not found")
+    video = db.scalar(select(Video).where(Video.match_id == match_id).order_by(Video.id))
+    if video is None:
+        raise HTTPException(status_code=400, detail="No video found")
+    detections = db.scalars(
+        select(Detection).where(Detection.video_id == video.id, Detection.class_name == "player").order_by(Detection.frame_timestamp, Detection.id)
+    ).all()
+    cluster_roles = {item.cluster_id: item.role for item in match.team_cluster_assignments}
+    records = [
+        {"class": item.class_name, "track_id": item.track_id, "timestamp": item.frame_timestamp, "box": item.bounding_box, "cluster": item.team_color_cluster, "jersey_number": item.jersey_number}
+        for item in detections
+        if item.track_id is not None
+    ]
+    result = calculate_tactical(records, team, video.width or 1, video.height or 1, cluster_roles)
+    return TacticalRead(
+        team_role=result.team_role,
+        formation=result.formation,
+        width=result.width,
+        depth=result.depth,
+        compactness=result.compactness,
+        players=[TacticalPlayerRead.model_validate(player) for player in result.players],
+        coordinate_note=result.coordinate_note,
+    )

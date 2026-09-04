@@ -141,7 +141,7 @@ def analyze_records(
                 {
                     "event_type": "pass" if same_cluster else "possession_loss",
                     "timestamp_seconds": timestamp,
-                    "track_id": previous_owner["track_id"],
+                    "track_id": owner["track_id"],
                     "video_id": video_id,
                     "description": "Estimated from nearest-player possession change",
                 }

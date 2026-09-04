@@ -31,6 +31,11 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
   const [heatmap, setHeatmap] = useState<Awaited<ReturnType<typeof api.getHeatmap>> | null>(null);
   const [heatmapError, setHeatmapError] = useState<string | null>(null);
   const [playerOptions, setPlayerOptions] = useState<PlayerOption[]>([]);
+  const [passingNetwork, setPassingNetwork] = useState<Awaited<ReturnType<typeof api.getPassingNetwork>> | null>(null);
+  const [passingTeam, setPassingTeam] = useState<"home" | "away">("home");
+  const [tacticalTeam, setTacticalTeam] = useState<"home" | "away" | "both">("home");
+  const [tactical, setTactical] = useState<Awaited<ReturnType<typeof api.getTactical>> | null>(null);
+  const [tacticalAway, setTacticalAway] = useState<Awaited<ReturnType<typeof api.getTactical>> | null>(null);
 
   const reload = useCallback(() => {
     api
@@ -49,6 +54,28 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
     api.getTeamClusters(matchId).then(setClusterAssignments).catch(() => undefined);
     api.getDetectedPlayers(matchId).then(setPlayerOptions).catch(() => undefined);
   }, [matchId]);
+
+  useEffect(() => {
+    api.getPassingNetwork(matchId).then(setPassingNetwork).catch(() => undefined);
+  }, [matchId]);
+
+  useEffect(() => {
+    const teams = tacticalTeam === "both" ? ["home", "away"] as const : [tacticalTeam];
+    Promise.all(teams.map((team) => api.getTactical(matchId, team)))
+      .then((results) => {
+        if (tacticalTeam === "both") {
+          setTactical(results[0]);
+          setTacticalAway(results[1]);
+        } else {
+          setTactical(results[0]);
+          setTacticalAway(null);
+        }
+      })
+      .catch(() => {
+        setTactical(null);
+        setTacticalAway(null);
+      });
+  }, [matchId, tacticalTeam]);
 
   useEffect(() => {
     if (heatmapMode === "team") {
@@ -376,6 +403,96 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
           <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
+                <h2 className="font-semibold text-slate-100">Tactical analysis</h2>
+                <p className="mt-1 text-sm text-slate-400">Approximate whole-match formation and team shape</p>
+              </div>
+              <select
+                value={tacticalTeam}
+                onChange={(event) => setTacticalTeam(event.target.value as "home" | "away" | "both")}
+                className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-200"
+              >
+                <option value="home">Home</option>
+                <option value="away">Away</option>
+                <option value="both">Both teams</option>
+              </select>
+            </div>
+            {tactical && tactical.players.length > 0 && (tacticalTeam !== "both" || (tacticalAway && tacticalAway.players.length > 0)) ? (
+              <div className="mt-5">
+                {tacticalTeam === "both" && tacticalAway ? (
+                  <>
+                    <div className="mb-3 flex flex-wrap gap-4 text-sm text-slate-300">
+                      <span>Home <strong className="text-emerald-300">{tactical.formation}</strong></span>
+                      <span>Away <strong className="text-sky-300">{tacticalAway.formation}</strong></span>
+                    </div>
+                    <TacticalPitch home={tactical} away={tacticalAway} />
+                  </>
+                ) : (
+                  <>
+                    <div className="grid gap-4 sm:grid-cols-4">
+                      <Stat label="Formation" value={tactical.formation} />
+                      <Stat label="Width" value={tactical.width.toFixed(3)} />
+                      <Stat label="Depth" value={tactical.depth.toFixed(3)} />
+                      <Stat label="Compactness" value={tactical.compactness.toFixed(3)} />
+                    </div>
+                    <TacticalPitch team={tacticalTeam} players={tactical.players} />
+                  </>
+                )}
+                <p className="mt-3 text-xs text-slate-500">{tactical.coordinate_note}</p>
+              </div>
+            ) : (
+              <p className="mt-5 text-sm text-slate-500">Run detection and analysis with team assignments to view tactical data.</p>
+            )}
+          </section>
+
+          <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="font-semibold text-slate-100">Passing network</h2>
+                <p className="mt-1 text-sm text-slate-400">Passes estimated from stored possession events</p>
+              </div>
+              <select
+                value={passingTeam}
+                onChange={(event) => setPassingTeam(event.target.value as "home" | "away")}
+                className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-200"
+              >
+                <option value="home">Home</option>
+                <option value="away">Away</option>
+              </select>
+            </div>
+            {passingNetwork && passingNetwork[passingTeam].edges.length === 0 ? (
+              <p className="mt-5 text-sm text-slate-500">Not enough pass data for this team yet.</p>
+            ) : passingNetwork ? (
+              <div className="mt-5">
+                <svg viewBox="0 0 100 100" className="aspect-[5/3] w-full max-w-3xl border border-slate-600 bg-slate-950" role="img" aria-label={`${passingTeam} passing network`}>
+                  {passingNetwork[passingTeam].edges.map((edge) => (
+                    <line
+                      key={`${edge.source_track_id}-${edge.target_track_id}`}
+                      x1={edge.source_x * 100}
+                      y1={edge.source_y * 100}
+                      x2={edge.target_x * 100}
+                      y2={edge.target_y * 100}
+                      stroke="rgb(56 189 248)"
+                      strokeOpacity={Math.min(0.9, 0.35 + edge.pass_count * 0.15)}
+                      strokeWidth={0.5 + edge.pass_count * 0.45}
+                    />
+                  ))}
+                  {passingNetwork[passingTeam].nodes.map((node) => (
+                    <g key={node.track_id}>
+                      <circle cx={node.average_x * 100} cy={node.average_y * 100} r="3" fill="rgb(16 185 129)" stroke="white" strokeWidth="0.5" />
+                      <text x={node.average_x * 100} y={node.average_y * 100 + 1} textAnchor="middle" fontSize="3" fill="white">{node.jersey_number ?? `?${node.track_id}`}</text>
+                    </g>
+                  ))}
+                </svg>
+                <p className="mt-3 text-xs text-slate-500">{passingNetwork.coordinate_note}</p>
+              </div>
+            ) : (
+              <p className="mt-5 text-sm text-slate-500">No passing data available yet. Run match analysis first.</p>
+            )}
+          </section>
+
+          <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
                 <h2 className="font-semibold text-slate-100">Heatmaps</h2>
                 <p className="mt-1 text-sm text-slate-400">Movement occupancy from stored player detections</p>
               </div>
@@ -547,5 +664,55 @@ function Stat({ label, value }: { label: string; value: string }) {
       <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
       <p className="mt-1 font-medium text-slate-100">{value}</p>
     </div>
+  );
+}
+
+type TacticalTeam = Awaited<ReturnType<typeof api.getTactical>>;
+
+function TacticalPitch({
+  team,
+  players,
+  home,
+  away,
+}: {
+  team?: "home" | "away" | "both";
+  players?: TacticalTeam["players"];
+  home?: TacticalTeam;
+  away?: TacticalTeam;
+}) {
+  const renderPlayers = (teamPlayers: TacticalTeam["players"], side: "home" | "away") =>
+    teamPlayers.map((player) => {
+      const x = side === "home" ? 5 + player.average_x * 47 : 100 - player.average_x * 47;
+      const y = 5 + player.average_y * 58;
+      return (
+        <g key={`${side}-${player.track_id}`}>
+          <circle cx={x} cy={y} r="2.7" fill={side === "home" ? "#10b981" : "#38bdf8"} stroke="#f8fafc" strokeWidth="0.45" />
+          <text x={x} y={y + 0.95} textAnchor="middle" fontSize="2.7" fill="white">{player.jersey_number ?? `?${player.track_id}`}</text>
+        </g>
+      );
+    });
+
+  return (
+    <svg viewBox="0 0 105 68" className="mt-5 aspect-[105/68] w-full max-w-3xl rounded-sm border border-emerald-950 bg-emerald-700" role="img" aria-label="Tactical football pitch">
+      <defs>
+        <pattern id="pitch-stripes" width="14" height="68" patternUnits="userSpaceOnUse">
+          <rect width="7" height="68" fill="#15803d" />
+          <rect x="7" width="7" height="68" fill="#166534" />
+        </pattern>
+      </defs>
+      <rect width="105" height="68" fill="url(#pitch-stripes)" />
+      <rect x="2" y="2" width="101" height="64" fill="none" stroke="#f8fafc" strokeWidth="0.7" />
+      <line x1="52.5" y1="2" x2="52.5" y2="66" stroke="#f8fafc" strokeWidth="0.55" />
+      <circle cx="52.5" cy="34" r="9.15" fill="none" stroke="#f8fafc" strokeWidth="0.55" />
+      <circle cx="52.5" cy="34" r="0.7" fill="#f8fafc" />
+      <rect x="2" y="13.84" width="16.5" height="40.32" fill="none" stroke="#f8fafc" strokeWidth="0.55" />
+      <rect x="86.5" y="13.84" width="16.5" height="40.32" fill="none" stroke="#f8fafc" strokeWidth="0.55" />
+      <rect x="2" y="24.84" width="5.5" height="18.32" fill="none" stroke="#f8fafc" strokeWidth="0.55" />
+      <rect x="97.5" y="24.84" width="5.5" height="18.32" fill="none" stroke="#f8fafc" strokeWidth="0.55" />
+      <circle cx="13" cy="34" r="0.65" fill="#f8fafc" />
+      <circle cx="92" cy="34" r="0.65" fill="#f8fafc" />
+      <path d="M2 2 A4 4 0 0 1 6 6 M103 2 A4 4 0 0 0 99 6 M2 66 A4 4 0 0 0 6 62 M103 66 A4 4 0 0 1 99 62" fill="none" stroke="#f8fafc" strokeWidth="0.55" />
+      {home && away ? <>{renderPlayers(home.players, "home")}{renderPlayers(away.players, "away")}</> : renderPlayers(players ?? [], team === "away" ? "away" : "home")}
+    </svg>
   );
 }
