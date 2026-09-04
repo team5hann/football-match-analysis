@@ -12,6 +12,9 @@ from app.models.video import Video
 from app.schemas.video import VideoRead
 from app.schemas.detection import DetectionRead, DetectionStatus
 from app.services.detection import list_detections, run_detection
+from app.services.enrichment import run_enrichment
+from app.models.detection import Detection
+from app.schemas.detection import DetectionUpdate
 from app.services.video_processing import FFprobeError, extract_video_metadata
 
 router = APIRouter(tags=["videos"])
@@ -129,6 +132,34 @@ def get_detection_status(video_id: int, db: Session = Depends(get_db)) -> Detect
         detections_count=len(detections),
         detections=[DetectionRead.model_validate(detection) for detection in detections],
     )
+
+
+@router.post("/api/videos/{video_id}/enrichment", response_model=DetectionStatus, status_code=202)
+def start_enrichment(video_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)) -> DetectionStatus:
+    video = db.get(Video, video_id)
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found")
+    if video.status == VideoStatus.PROCESSING:
+        raise HTTPException(status_code=409, detail="Processing is already running")
+    if not db.query(Detection).filter(Detection.video_id == video_id, Detection.class_name == "player").first():
+        raise HTTPException(status_code=400, detail="Run player detection before enrichment")
+    video.status = VideoStatus.PROCESSING
+    video.match.status = MatchStatus.PROCESSING
+    db.commit()
+    background_tasks.add_task(run_enrichment, video_id)
+    return DetectionStatus(video_id=video_id, status=_status_value(video.status), detections_count=0, detections=[])
+
+
+@router.patch("/api/detections/{detection_id}", response_model=DetectionRead)
+def update_detection(detection_id: int, payload: DetectionUpdate, db: Session = Depends(get_db)) -> Detection:
+    detection = db.get(Detection, detection_id)
+    if detection is None:
+        raise HTTPException(status_code=404, detail="Detection not found")
+    detection.jersey_number = payload.jersey_number
+    detection.jersey_number_confidence = 1.0 if payload.jersey_number is not None else None
+    db.commit()
+    db.refresh(detection)
+    return detection
 
 
 @router.delete("/api/videos/{video_id}", status_code=204)
