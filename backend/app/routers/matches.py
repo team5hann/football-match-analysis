@@ -1,8 +1,8 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.core.database import get_db
+from app.core.database import SessionLocal, get_db
 from app.models.match import Match
 from app.models.detection import Detection
 from app.models.team_cluster import TeamClusterAssignment
@@ -20,6 +20,8 @@ from app.schemas.passing_network import PassingNetworkRead
 from app.services.passing_network import build_passing_network
 from app.schemas.tactical import TacticalRead, TacticalPlayerRead
 from app.services.tactical import calculate_tactical
+from app.schemas.shots import ShotRead, ShotsRead
+from app.services.shots import detect_shots
 from app.schemas.player_option import PlayerOptionRead
 from app.services.player_options import build_player_options
 
@@ -290,3 +292,100 @@ def get_tactical_analysis(
         players=[TacticalPlayerRead.model_validate(player) for player in result.players],
         coordinate_note=result.coordinate_note,
     )
+
+
+@router.post("/{match_id}/shots", response_model=ShotsRead, status_code=202)
+def start_shot_detection(match_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)) -> ShotsRead:
+    match = db.get(Match, match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Match not found")
+    if not db.scalar(select(Detection.id).join(Video, Detection.video_id == Video.id).where(Video.match_id == match_id, Detection.class_name == "ball")):
+        raise HTTPException(status_code=400, detail="No ball detections found")
+    match.status = MatchStatus.PROCESSING
+    db.commit()
+    background_tasks.add_task(run_shot_detection, match_id)
+    return ShotsRead(status="processing", home_xg=0, away_xg=0, shots=[], note="Shot detection is a heuristic based on sparse ball detections.")
+
+
+def run_shot_detection(match_id: int) -> None:
+    db = SessionLocal()
+    match = db.get(Match, match_id)
+    if match is None:
+        db.close()
+        return
+    try:
+        video = db.scalar(select(Video).where(Video.match_id == match_id).order_by(Video.id))
+        if video is None:
+            raise ValueError("No video found")
+        detections = db.scalars(select(Detection).where(Detection.video_id == video.id).order_by(Detection.frame_timestamp, Detection.id)).all()
+        cluster_roles = {item.cluster_id: item.role for item in match.team_cluster_assignments}
+        records = [
+            {"class": item.class_name, "track_id": item.track_id, "timestamp": item.frame_timestamp, "box": item.bounding_box, "cluster": item.team_color_cluster}
+            for item in detections
+        ]
+        shots = detect_shots(
+            [record for record in records if record["class"] == "ball"],
+            [record for record in records if record["class"] == "player"],
+            video.width or 1,
+            video.height or 1,
+            cluster_roles,
+        )
+        db.execute(delete(Event).where(Event.match_id == match_id, Event.event_type == "shot"))
+        for shot in shots:
+            db.add(Event(
+                match_id=match_id,
+                video_id=video.id,
+                track_id=shot.track_id,
+                event_type="shot",
+                timestamp_seconds=shot.timestamp,
+                position_x=shot.position_x,
+                position_y=shot.position_y,
+                xg=shot.xg,
+                confidence=shot.xg,
+                description=shot.description,
+                manually_verified=False,
+            ))
+        match.status = MatchStatus.ANALYZED
+        db.commit()
+    except Exception:
+        db.rollback()
+        match.status = MatchStatus.FAILED
+        db.commit()
+    finally:
+        db.close()
+
+
+@router.get("/{match_id}/shots", response_model=ShotsRead)
+def get_shots(match_id: int, db: Session = Depends(get_db)) -> ShotsRead:
+    match = db.get(Match, match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Match not found")
+    shots = db.scalars(select(Event).where(Event.match_id == match_id, Event.event_type == "shot").order_by(Event.timestamp_seconds, Event.id)).all()
+    result = [
+        ShotRead(
+            id=shot.id,
+            timestamp_seconds=shot.timestamp_seconds,
+            track_id=shot.track_id,
+            team_role="unknown",
+            xg=shot.xg or 0,
+            position_x=shot.position_x,
+            position_y=shot.position_y,
+            description=shot.description,
+        )
+        for shot in shots
+    ]
+    if shots:
+        video = db.scalar(select(Video).where(Video.match_id == match_id).order_by(Video.id))
+        if video:
+            detections = db.scalars(select(Detection).where(Detection.video_id == video.id, Detection.class_name == "player")).all()
+            cluster_roles = {item.cluster_id: item.role for item in match.team_cluster_assignments}
+            role_by_track = {}
+            for detection in detections:
+                if detection.track_id is not None:
+                    role_by_track.setdefault(detection.track_id, []).append(cluster_roles.get(detection.team_color_cluster, "unknown"))
+            for item in result:
+                roles = role_by_track.get(item.track_id, ["unknown"])
+                item.team_role = max(set(roles), key=roles.count)
+    home_xg = round(sum(item.xg for item in result if item.team_role == "home"), 4)
+    away_xg = round(sum(item.xg for item in result if item.team_role == "away"), 4)
+    return ShotsRead(status="analyzed" if shots else (match.status.value if hasattr(match.status, "value") else match.status), home_xg=home_xg, away_xg=away_xg, shots=result, note="Shot detection is a rough heuristic from sparse ball detections; many shots may be missed.")

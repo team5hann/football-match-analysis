@@ -134,7 +134,10 @@ pytest
   depth, compactness, and average player positions from stored detections.
   These metrics use whole-video camera coordinates and do not model formation
   changes over time.
-- **Phase 5+** — xG,
+- **Phase 5d (this repo)** — heuristic shot detection and distance/angle xG
+  estimates from stored sparse ball detections. Shot results are approximate;
+  sparse sampling can miss short shooting sequences.
+- **Phase 5+** — advanced xG,
   automatic clip and highlight generation, AI Coach, report export.
 
 See the original product specification (in the project's build brief) for the

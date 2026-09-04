@@ -31,6 +31,7 @@ class Event(Base):
     position_y: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    xg: Mapped[float | None] = mapped_column(Float, nullable=True)
     description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     manually_verified: Mapped[bool] = mapped_column(default=False, nullable=False)
 

@@ -36,6 +36,8 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
   const [tacticalTeam, setTacticalTeam] = useState<"home" | "away" | "both">("home");
   const [tactical, setTactical] = useState<Awaited<ReturnType<typeof api.getTactical>> | null>(null);
   const [tacticalAway, setTacticalAway] = useState<Awaited<ReturnType<typeof api.getTactical>> | null>(null);
+  const [shots, setShots] = useState<Awaited<ReturnType<typeof api.getShots>> | null>(null);
+  const [startingShots, setStartingShots] = useState(false);
 
   const reload = useCallback(() => {
     api
@@ -57,6 +59,10 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
 
   useEffect(() => {
     api.getPassingNetwork(matchId).then(setPassingNetwork).catch(() => undefined);
+  }, [matchId]);
+
+  useEffect(() => {
+    api.getShots(matchId).then(setShots).catch(() => undefined);
   }, [matchId]);
 
   useEffect(() => {
@@ -170,6 +176,18 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
       setDetectionError(err instanceof ApiError ? err.message : "Failed to start analysis");
     } finally {
       setStartingAnalysis(false);
+    }
+  }
+
+  async function handleStartShots() {
+    setStartingShots(true);
+    setDetectionError(null);
+    try {
+      setShots(await api.startShotDetection(matchId));
+    } catch (err: unknown) {
+      setDetectionError(err instanceof ApiError ? err.message : "Failed to detect shots");
+    } finally {
+      setStartingShots(false);
     }
   }
 
@@ -398,6 +416,52 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
                 </div>
               </div>
             )}
+          </section>
+
+          <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="font-semibold text-slate-100">Shots &amp; xG</h2>
+                <p className="mt-1 text-sm text-slate-400">Heuristic estimates from stored ball detections</p>
+              </div>
+              <button
+                type="button"
+                onClick={handleStartShots}
+                disabled={startingShots || detection?.status !== "analyzed"}
+                className="rounded-md bg-amber-400 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {startingShots ? "Detecting…" : "Detect shots"}
+              </button>
+            </div>
+            {shots?.shots.length ? (
+              <>
+                <div className="mt-5 grid grid-cols-2 gap-3">
+                  <Stat label="Home xG" value={shots.home_xg.toFixed(2)} />
+                  <Stat label="Away xG" value={shots.away_xg.toFixed(2)} />
+                </div>
+                <div className="mt-5 space-y-2">
+                  {shots.shots.map((shot) => (
+                    <button
+                      key={shot.id}
+                      type="button"
+                      onClick={() => {
+                        if (videoElement.current) {
+                          videoElement.current.currentTime = shot.timestamp_seconds;
+                          void videoElement.current.play();
+                        }
+                      }}
+                      className="flex w-full items-center justify-between rounded-md border border-slate-800 px-3 py-2 text-left text-sm text-slate-300 hover:bg-slate-800"
+                    >
+                      <span>{shot.team_role === "home" ? "Home" : "Away"} · track {shot.track_id ?? "—"}</span>
+                      <span className="text-slate-400">{shot.timestamp_seconds}s · xG {shot.xg.toFixed(2)}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="mt-5 text-sm text-slate-500">No shots detected yet. Sparse ball detections may miss short shooting sequences.</p>
+            )}
+            {shots?.note && <p className="mt-3 text-xs text-slate-500">{shots.note}</p>}
           </section>
 
           <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
