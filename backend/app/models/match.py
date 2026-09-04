@@ -29,3 +29,6 @@ class Match(Base):
     videos: Mapped[list["Video"]] = relationship(back_populates="match", cascade="all, delete-orphan")
     events: Mapped[list["Event"]] = relationship(back_populates="match", cascade="all, delete-orphan")
     clips: Mapped[list["Clip"]] = relationship(back_populates="match", cascade="all, delete-orphan")
+    team_cluster_assignments: Mapped[list["TeamClusterAssignment"]] = relationship(
+        back_populates="match", cascade="all, delete-orphan"
+    )

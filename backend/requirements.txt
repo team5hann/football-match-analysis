@@ -12,3 +12,4 @@ python-dotenv==1.0.1
 torch==2.5.1+cpu
 torchvision==0.20.1+cpu
 ultralytics==8.3.70
+easyocr==1.7.2

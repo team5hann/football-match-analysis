@@ -4,16 +4,16 @@ An AI-powered football match video analysis platform. Upload a match recording a
 (eventually) get automatic player/ball detection, event recognition, tactical
 statistics, heatmaps, auto-generated clips, and an AI coach — built up in phases.
 
-This repo currently implements **Phase 2: basic YOLOv8 detection** — real video
-upload, PostgreSQL storage, FFmpeg frame sampling, and per-frame player/ball
-detections visible in the match detail view.
+This repo currently implements **Phase 3: player detection enrichment** — YOLOv8
+per-frame detections, kit-color clustering, CPU-only jersey-number OCR, and
+manual team/jersey corrections in the match detail view.
 
 ## Tech stack
 
 - **Backend**: FastAPI (Python), SQLAlchemy, Alembic
 - **Database**: PostgreSQL
 - **Frontend**: Next.js (App Router, TypeScript, Tailwind CSS)
-- **Video processing**: FFmpeg / ffprobe and Ultralytics YOLOv8
+- **Video processing**: FFmpeg / ffprobe, Ultralytics YOLOv8, EasyOCR (CPU)
 
 ## Project structure
 
@@ -24,7 +24,7 @@ backend/
     models/     # SQLAlchemy models: Team, Player, Match, Video, Detection, Event, Clip
     schemas/    # Pydantic request/response schemas
     routers/    # FastAPI routers: teams, players, matches, videos
-    services/   # video_processing.py and detection.py — FFmpeg + YOLOv8
+    services/   # video_processing.py, detection.py, enrichment.py
   alembic/      # DB migrations
   tests/        # pytest suite (full upload flow, validation)
 frontend/
@@ -34,7 +34,7 @@ frontend/
 docker-compose.yml
 ```
 
-## Data model (Phase 1)
+## Data model
 
 - **teams**, **players** — basic roster data
 - **matches** — home/away team, competition, date, status
@@ -42,6 +42,7 @@ docker-compose.yml
 - **videos** — one or more video files per match, with metadata extracted by
   ffprobe on upload (duration, resolution, fps, codecs, file size)
 - **detections** — sampled-frame player/ball bounding boxes, confidence, and timestamp
+- **team_cluster_assignments** — manual Home/Away/referee labels for color clusters
 - **events**, **clips** — schemas are defined now so later phases (event
   detection, auto-generated clips) don't need new migrations, but these
   tables are intentionally left empty until Phase 4/5
@@ -115,10 +116,10 @@ pytest
 
 - **Phase 1** — upload, store, and play back match video; CRUD for
   teams/players/matches; ffprobe metadata extraction.
-- **Phase 2 (this repo)** — YOLOv8 player/ball detection sampled at one frame per
+- **Phase 2** — YOLOv8 player/ball detection sampled at one frame per
   second, storing per-frame detections and showing counts in the match detail view.
-- **Phase 3** — team classification by kit color, jersey number OCR, manual
-  player assignment, tracking ID → player identity linking.
+- **Phase 3 (this repo)** — torso RGB clustering, CPU EasyOCR jersey numbers, and
+  manual cluster/team and jersey corrections.
 - **Phase 4** — possession, touches, distance/speed, and simple event
   detection (pass, loss of possession, shot), all linked back to video
   timestamps.

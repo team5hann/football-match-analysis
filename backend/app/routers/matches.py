@@ -1,10 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
 from app.models.match import Match
+from app.models.detection import Detection
+from app.models.team_cluster import TeamClusterAssignment
+from app.models.video import Video
 from app.schemas.match import MatchCreate, MatchDetail, MatchRead, MatchUpdate
+from app.schemas.team_cluster import TeamClusterAssignmentRead, TeamClusterAssignmentUpdate
 
 router = APIRouter(prefix="/api/matches", tags=["matches"])
 
@@ -58,3 +62,54 @@ def delete_match(match_id: int, db: Session = Depends(get_db)) -> None:
         raise HTTPException(status_code=404, detail="Match not found")
     db.delete(match)
     db.commit()
+
+
+@router.get("/{match_id}/team-clusters", response_model=list[TeamClusterAssignmentRead])
+def list_team_clusters(match_id: int, db: Session = Depends(get_db)) -> list[TeamClusterAssignmentRead]:
+    if db.get(Match, match_id) is None:
+        raise HTTPException(status_code=404, detail="Match not found")
+    assignments = db.scalars(
+        select(TeamClusterAssignment).where(TeamClusterAssignment.match_id == match_id).order_by(TeamClusterAssignment.cluster_id)
+    ).all()
+    result = []
+    for assignment in assignments:
+        count = db.scalar(
+            select(func.count(Detection.id))
+            .join(Video, Detection.video_id == Video.id)
+            .where(
+                Video.match_id == match_id,
+                Detection.class_name == "player",
+                Detection.team_color_cluster == assignment.cluster_id,
+            )
+        )
+        result.append(
+            TeamClusterAssignmentRead(
+                id=assignment.id,
+                cluster_id=assignment.cluster_id,
+                role=assignment.role,
+                team_id=assignment.team_id,
+                detections_count=count or 0,
+            )
+        )
+    return result
+
+
+@router.put("/{match_id}/team-clusters", response_model=list[TeamClusterAssignmentRead])
+def save_team_clusters(
+    match_id: int, payload: list[TeamClusterAssignmentUpdate], db: Session = Depends(get_db)
+) -> list[TeamClusterAssignmentRead]:
+    match = db.get(Match, match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Match not found")
+    existing = {item.cluster_id: item for item in db.scalars(
+        select(TeamClusterAssignment).where(TeamClusterAssignment.match_id == match_id)
+    ).all()}
+    for item in payload:
+        assignment = existing.get(item.cluster_id)
+        if assignment is None:
+            assignment = TeamClusterAssignment(match_id=match_id, cluster_id=item.cluster_id)
+            db.add(assignment)
+        assignment.role = item.role
+        assignment.team_id = item.team_id
+    db.commit()
+    return list_team_clusters(match_id, db)

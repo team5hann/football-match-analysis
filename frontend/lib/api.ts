@@ -16,6 +16,10 @@ export interface Detection {
   bounding_box: { x: number; y: number; width: number; height: number };
   class: "player" | "ball";
   confidence: number;
+  team_color_cluster: number | null;
+  dominant_rgb: number[] | null;
+  jersey_number: number | null;
+  jersey_number_confidence: number | null;
   created_at: string;
 }
 
@@ -24,6 +28,16 @@ export interface DetectionStatus {
   status: VideoStatus;
   detections_count: number;
   detections: Detection[];
+}
+
+export type TeamClusterRole = "home" | "away" | "referee";
+
+export interface TeamClusterAssignment {
+  id: number;
+  cluster_id: number;
+  role: TeamClusterRole;
+  team_id: number | null;
+  detections_count: number;
 }
 
 export interface Team {
@@ -137,6 +151,20 @@ export const api = {
     request<DetectionStatus>(`/api/videos/${videoId}/detection`, { method: "POST" }),
   getDetectionStatus: (videoId: number) =>
     request<DetectionStatus>(`/api/videos/${videoId}/detection`),
+  startEnrichment: (videoId: number) =>
+    request<DetectionStatus>(`/api/videos/${videoId}/enrichment`, { method: "POST" }),
+  getTeamClusters: (matchId: number) =>
+    request<TeamClusterAssignment[]>(`/api/matches/${matchId}/team-clusters`),
+  saveTeamClusters: (matchId: number, assignments: Array<{ cluster_id: number; role: TeamClusterRole; team_id: number | null }>) =>
+    request<TeamClusterAssignment[]>(`/api/matches/${matchId}/team-clusters`, {
+      method: "PUT",
+      body: JSON.stringify(assignments),
+    }),
+  updateDetection: (detectionId: number, jerseyNumber: number | null) =>
+    request<Detection>(`/api/detections/${detectionId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ jersey_number: jerseyNumber }),
+    }),
 };
 
 function uploadWithProgress(

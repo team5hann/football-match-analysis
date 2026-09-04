@@ -15,6 +15,10 @@ class Detection(Base):
     bounding_box: Mapped[dict] = mapped_column(JSON, nullable=False)
     class_name: Mapped[str] = mapped_column("class", String(20), nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    team_color_cluster: Mapped[int | None] = mapped_column(nullable=True)
+    dominant_rgb: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
+    jersey_number: Mapped[int | None] = mapped_column(nullable=True)
+    jersey_number_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     video: Mapped["Video"] = relationship(back_populates="detections")
