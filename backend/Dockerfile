@@ -13,6 +13,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+RUN mkdir -p /app/models && \
+    gdown --id 1isw4wx-MK9h9LMr36VvIWlJD6ppUvw7V \
+    -O /app/models/football-ball-detection.pt
+
 RUN mkdir -p /app/storage/videos
 
 EXPOSE 8000

@@ -9,10 +9,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
+from app.core.config import get_settings
 from app.models.detection import Detection
 from app.models.enums import MatchStatus, VideoStatus
 from app.models.video import Video
 from app.services.detection import extract_frames
+
+settings = get_settings()
 
 
 def dominant_torso_rgb(image: np.ndarray, bounding_box: dict[str, float]) -> list[int] | None:
@@ -113,7 +116,8 @@ def run_enrichment(
             colors: list[list[int]] = []
             enriched: list[Detection] = []
             for detection in player_detections:
-                image = frame_by_timestamp.get(int(detection.frame_timestamp))
+                frame_index = round(detection.frame_timestamp / settings.detection_sample_interval_seconds)
+                image = frame_by_timestamp.get(frame_index)
                 if image is None:
                     continue
                 color = dominant_torso_rgb(image, detection.bounding_box)

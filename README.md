@@ -15,6 +15,12 @@ possession, movement estimates, and basic pass/loss events.
 - **Frontend**: Next.js (App Router, TypeScript, Tailwind CSS)
 - **Video processing**: FFmpeg / ffprobe, Ultralytics YOLOv8, EasyOCR (CPU)
 
+Detection uses the general `yolov8n.pt` model for players and the football-specific
+`football-ball-detection.pt` model from [Football-PitchVision](https://github.com/DesusLove/Football-PitchVision)
+for balls. The ball weights are downloaded from the project's public Google Drive
+asset during the backend Docker build into `backend/models/`; they are not committed
+to this repository. The upstream README identifies the YOLO weights as AGPL-3.0.
+
 ## Project structure
 
 ```
@@ -62,6 +68,12 @@ docker compose up --build
 
 Uploaded videos persist in the `video_storage` Docker volume; Postgres data in
 `postgres_data`.
+
+Detection sampling defaults to 10 FPS (`0.1` seconds). Override it with the
+`DETECTION_SAMPLE_INTERVAL_SECONDS` environment variable, for example
+`DETECTION_SAMPLE_INTERVAL_SECONDS=0.2` for 5 FPS. To discard existing detections,
+events, clips, and match-level analysis and run detection again, call
+`POST /api/videos/{video_id}/detection/regenerate`.
 
 ## Running locally without Docker
 

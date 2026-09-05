@@ -36,6 +36,27 @@ def test_detection_stores_player_detections(client, tmp_path):
     assert body["detections_count"] >= 1
     assert body["detections"][0]["class"] == "player"
     assert body["detections"][0]["bounding_box"] == {"x": 10.0, "y": 20.0, "width": 50.0, "height": 80.0}
+    assert body["detections"][1]["frame_timestamp"] == 0.1
+
+
+def test_detection_stores_specialized_ball_detections(client, tmp_path):
+    match = client.post("/api/matches", json={}).json()
+    video_path = _make_test_video(tmp_path)
+    with video_path.open("rb") as video_file:
+        response = client.post(
+            f"/api/matches/{match['id']}/video",
+            files={"file": ("clip.mp4", video_file, "video/mp4")},
+        )
+    assert response.status_code == 201, response.text
+
+    run_detection(
+        response.json()["id"],
+        model=FakeYoloModel(),
+        ball_model=FakeBallYoloModel(),
+    )
+
+    detections = client.get(f"/api/videos/{response.json()['id']}/detection").json()["detections"]
+    assert {detection["class"] for detection in detections} == {"player", "ball"}
 
 
 class FakeTensor:
@@ -54,6 +75,20 @@ class FakeYoloModel:
                 boxes=SimpleNamespace(
                     xyxy=FakeTensor([[10, 20, 60, 100]]),
                     conf=FakeTensor([0.91]),
+                    cls=FakeTensor([0]),
+                )
+            )
+        ]
+
+
+class FakeBallYoloModel:
+    def __call__(self, frame_path: str, verbose: bool = False):
+        assert Path(frame_path).suffix == ".jpg"
+        return [
+            SimpleNamespace(
+                boxes=SimpleNamespace(
+                    xyxy=FakeTensor([[120, 80, 128, 88]]),
+                    conf=FakeTensor([0.87]),
                     cls=FakeTensor([0]),
                 )
             )

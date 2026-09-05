@@ -11,7 +11,7 @@ from app.models.match import Match
 from app.models.video import Video
 from app.schemas.video import VideoRead
 from app.schemas.detection import DetectionRead, DetectionStatus
-from app.services.detection import list_detections, run_detection
+from app.services.detection import list_detections, reset_detection_data, run_detection
 from app.services.enrichment import run_enrichment
 from app.models.detection import Detection
 from app.schemas.detection import DetectionUpdate
@@ -113,6 +113,24 @@ def start_detection(video_id: int, background_tasks: BackgroundTasks, db: Sessio
         raise HTTPException(status_code=404, detail="Video not found")
     if video.status == VideoStatus.PROCESSING:
         raise HTTPException(status_code=409, detail="Detection is already running")
+    video.status = VideoStatus.PROCESSING
+    video.match.status = MatchStatus.PROCESSING
+    db.commit()
+    background_tasks.add_task(run_detection, video_id)
+    return DetectionStatus(video_id=video_id, status=_status_value(video.status), detections_count=0, detections=[])
+
+
+@router.post("/api/videos/{video_id}/detection/regenerate", response_model=DetectionStatus, status_code=202)
+def regenerate_detection(
+    video_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
+) -> DetectionStatus:
+    video = db.get(Video, video_id)
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found")
+    if video.status == VideoStatus.PROCESSING:
+        raise HTTPException(status_code=409, detail="Processing is already running")
+
+    reset_detection_data(video_id, db)
     video.status = VideoStatus.PROCESSING
     video.match.status = MatchStatus.PROCESSING
     db.commit()
