@@ -18,7 +18,7 @@ const LABELS: Record<MatchStatus, string> = {
 
 export default function StatusBadge({ status }: { status: MatchStatus }) {
   return (
-    <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${STYLES[status]}`}>
+    <span className={`inline-block rounded-md px-2.5 py-1 text-xs font-medium ${STYLES[status]}`}>
       {LABELS[status]}
     </span>
   );

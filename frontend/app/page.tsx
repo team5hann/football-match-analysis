@@ -23,8 +23,11 @@ export default function HomePage() {
 
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Matches</h1>
+      <div className="mb-8 flex items-end justify-between gap-4">
+        <div>
+          <p className="mb-2 text-xs font-medium uppercase tracking-[0.18em] text-slate-500">Workspace</p>
+          <h1 className="text-3xl font-semibold tracking-tight">Matches</h1>
+        </div>
         <Link
           href="/matches/new"
           className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500"
@@ -57,7 +60,7 @@ export default function HomePage() {
       )}
 
       {matches && matches.length > 0 && (
-        <ul className="divide-y divide-slate-800 rounded-lg border border-slate-800 bg-slate-900/40">
+        <ul className="divide-y divide-slate-800 rounded-lg border border-slate-800 bg-slate-900/40 shadow-sm">
           {matches.map((match) => (
             <li key={match.id} className="flex items-center gap-4 px-5 py-4 hover:bg-slate-800/50">
               <Link

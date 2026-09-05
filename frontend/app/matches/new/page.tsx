@@ -68,7 +68,8 @@ export default function NewMatchPage() {
 
   return (
     <div className="mx-auto max-w-2xl">
-      <h1 className="mb-6 text-2xl font-semibold">New Analysis</h1>
+      <p className="mb-2 text-xs font-medium uppercase tracking-[0.18em] text-slate-500">Match setup</p>
+      <h1 className="mb-8 text-3xl font-semibold tracking-tight">New Analysis</h1>
 
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -123,7 +124,7 @@ export default function NewMatchPage() {
         <Field label="Match video">
           <label
             htmlFor="video"
-            className="flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-slate-700 bg-slate-900/40 px-6 py-10 text-center hover:border-emerald-600"
+            className="flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-slate-700 bg-slate-900/40 px-6 py-10 text-center shadow-sm hover:border-emerald-600"
           >
             <span className="text-3xl">🎬</span>
             <span className="mt-2 text-sm text-slate-300">
@@ -173,15 +174,15 @@ export default function NewMatchPage() {
       <style jsx global>{`
         .input {
           width: 100%;
-          border-radius: 0.375rem;
-          border: 1px solid rgb(51 65 85);
-          background-color: rgb(15 23 42 / 0.6);
-          padding: 0.5rem 0.75rem;
-          color: rgb(241 245 249);
+          border-radius: 0.4375rem;
+          border: 1px solid var(--color-border);
+          background-color: var(--color-surface-raised);
+          padding: 0.625rem 0.75rem;
+          color: var(--color-text);
         }
         .input:focus {
           outline: none;
-          border-color: rgb(16 185 129);
+          border-color: var(--color-home);
         }
       `}</style>
     </div>

@@ -42,6 +42,7 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
   const [clipCategory, setClipCategory] = useState<"all" | "shot" | "pass" | "possession_loss">("all");
   const [highlightsUrl, setHighlightsUrl] = useState<string | null>(null);
   const [generatingHighlights, setGeneratingHighlights] = useState(false);
+  const [detectionPage, setDetectionPage] = useState(1);
 
   const reload = useCallback(() => {
     api
@@ -148,6 +149,10 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
       window.clearInterval(interval);
     };
   }, [videoId]);
+
+  useEffect(() => {
+    setDetectionPage(1);
+  }, [detection?.detections_count]);
 
   async function handleStartDetection() {
     if (!video) return;
@@ -319,18 +324,14 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
           )}
 
           <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="font-semibold text-slate-100">Player detection</h2>
-                <p className="mt-1 text-sm text-slate-400">
-                  {detection?.status === "processing"
-                    ? "Analyzing one frame per second…"
-                    : detection?.status === "analyzed"
-                      ? `${detection.detections_count} detections found`
-                      : "Run YOLOv8 on this video"}
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
+            <Accordion
+              title="Player detection"
+              summary={detection?.status === "processing"
+                ? "Analyzing sampled video frames…"
+                : detection?.status === "analyzed"
+                  ? `${detection.detections_count} detections found`
+                  : "Run YOLOv8 on this video"}
+              actions={(
                 <button
                   type="button"
                   onClick={handleStartDetection}
@@ -339,20 +340,20 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
                 >
                   {startingDetection || detection?.status === "processing" ? "Detecting…" : "Spustit detekci"}
                 </button>
-                <button
-                  type="button"
-                  onClick={handleStartEnrichment}
-                  disabled={startingEnrichment || detection?.status !== "analyzed"}
-                  className="rounded-md border border-emerald-700 px-3 py-2 text-sm font-semibold text-emerald-300 hover:bg-emerald-950 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {startingEnrichment ? "Reading…" : "Barvy + OCR"}
-                </button>
-              </div>
-            </div>
-
+              )}
+            >
             {detectionError && <p className="mt-3 text-sm text-red-300">{detectionError}</p>}
-            {detection?.status === "analyzed" && detection.detections_count > 0 && (
-              <div className="mt-5 overflow-x-auto">
+            {detection?.status === "analyzed" && detection.detections_count > 0 && (() => {
+              const frameRows = [...new Set(detection.detections.map((item) => item.frame_timestamp))].map((timestamp) => ({
+                timestamp,
+                detections: detection.detections.filter((item) => item.frame_timestamp === timestamp),
+              }));
+              const pageSize = 25;
+              const pageCount = Math.max(1, Math.ceil(frameRows.length / pageSize));
+              const currentPage = Math.min(detectionPage, pageCount);
+              const visibleRows = frameRows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+              return <div className="mt-5">
+                <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm">
                   <thead className="text-xs uppercase tracking-wide text-slate-500">
                     <tr>
@@ -362,10 +363,7 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
                     </tr>
                   </thead>
                   <tbody>
-                    {[...new Set(detection.detections.map((item) => item.frame_timestamp))].map((timestamp) => {
-                      const frameDetections = detection.detections.filter(
-                        (item) => item.frame_timestamp === timestamp
-                      );
+                    {visibleRows.map(({ timestamp, detections: frameDetections }) => {
                       return (
                         <tr key={timestamp} className="border-t border-slate-800 text-slate-300">
                           <td className="py-2">{timestamp}s</td>
@@ -377,7 +375,26 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
                   </tbody>
                 </table>
               </div>
-            )}
+                {pageCount > 1 && (
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-400">
+                    <span>Page {currentPage} of {pageCount} · {frameRows.length} sampled frames</span>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => setDetectionPage((page) => Math.max(1, page - 1))} disabled={currentPage === 1} className="rounded-md border border-slate-700 px-3 py-1.5 hover:bg-slate-800 disabled:opacity-40">Previous</button>
+                      <button type="button" onClick={() => setDetectionPage((page) => Math.min(pageCount, page + 1))} disabled={currentPage === pageCount} className="rounded-md border border-slate-700 px-3 py-1.5 hover:bg-slate-800 disabled:opacity-40">Next</button>
+                    </div>
+                  </div>
+                )}
+              </div>;
+            })()}
+            </Accordion>
+          </section>
+
+          <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
+            <Accordion title="Barvy + OCR" summary={detection?.status === "analyzed" ? "Team colors and jersey number recognition" : "Run detection first"} actions={(
+              <button type="button" onClick={handleStartEnrichment} disabled={startingEnrichment || detection?.status !== "analyzed"} className="rounded-md border border-emerald-700 px-3 py-2 text-sm font-semibold text-emerald-300 hover:bg-emerald-950 disabled:cursor-not-allowed disabled:opacity-60">
+                {startingEnrichment ? "Reading…" : "Barvy + OCR"}
+              </button>
+            )}>
 
             {detection?.status === "analyzed" && detection.detections.some((item) => item.team_color_cluster !== null) && (
               <div className="mt-5 border-t border-slate-800 pt-5">
@@ -440,12 +457,12 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
                 </div>
               </div>
             )}
+            </Accordion>
           </section>
 
           <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
-            <h2 className="font-semibold text-slate-100">Export report</h2>
-            <p className="mt-1 text-sm text-slate-400">Download the current match data without reprocessing the video.</p>
-            <div className="mt-4 flex flex-wrap gap-2">
+            <Accordion title="Export report" summary="Download the current match data without reprocessing the video." actions={(
+              <div className="flex flex-wrap gap-2">
               {(["pdf", "xlsx", "csv"] as const).map((format) => (
                 <button
                   key={format}
@@ -456,15 +473,16 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
                   {format === "xlsx" ? "Excel" : format.toUpperCase()}
                 </button>
               ))}
-            </div>
+              </div>
+            )}>
+              <p className="text-sm text-slate-400">
+                Export the current match data as a PDF, Excel workbook, or CSV file.
+              </p>
+            </Accordion>
           </section>
 
           <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="font-semibold text-slate-100">Shots &amp; xG</h2>
-                <p className="mt-1 text-sm text-slate-400">Heuristic estimates from stored ball detections</p>
-              </div>
+            <Accordion title="Shots & xG" summary={shots?.shots.length ? `${shots.shots.length} shots detected` : "Heuristic estimates from stored ball detections"} actions={(
               <button
                 type="button"
                 onClick={handleStartShots}
@@ -473,7 +491,7 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
               >
                 {startingShots ? "Detecting…" : "Detect shots"}
               </button>
-            </div>
+            )}>
             {shots?.shots.length ? (
               <>
                 <div className="mt-5 grid grid-cols-2 gap-3">
@@ -495,14 +513,11 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
               <p className="mt-5 text-sm text-slate-500">No shots detected yet. Sparse ball detections may miss short shooting sequences.</p>
             )}
             {shots?.note && <p className="mt-3 text-xs text-slate-500">{shots.note}</p>}
+            </Accordion>
           </section>
 
           <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="font-semibold text-slate-100">Clips</h2>
-                <p className="mt-1 text-sm text-slate-400">On-demand moments from stored events</p>
-              </div>
+            <Accordion title="Clips" summary={`${clips.length} stored events available`} actions={(
               <div className="flex flex-wrap gap-2">
                 <select value={clipCategory} onChange={(event) => setClipCategory(event.target.value as typeof clipCategory)} className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-200">
                   <option value="all">All categories</option>
@@ -514,7 +529,7 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
                   {generatingHighlights ? "Generating…" : "Generovat highlights"}
                 </button>
               </div>
-            </div>
+            )}>
             {highlightsUrl && (
               <div className="mt-5 space-y-3">
                 <video controls className="aspect-video w-full max-w-3xl" src={highlightsUrl} />
@@ -533,14 +548,11 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
               {clips.filter((clip) => clipCategory === "all" || clip.event_type === clipCategory).length === 0 && <p className="text-sm text-slate-500">No clips available for this category.</p>}
             </div>
             {/* TODO: goals are unavailable because score detection is not implemented. */}
+            </Accordion>
           </section>
 
           <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="font-semibold text-slate-100">Tactical analysis</h2>
-                <p className="mt-1 text-sm text-slate-400">Approximate whole-match formation and team shape</p>
-              </div>
+            <Accordion title="Tactical analysis" summary="Approximate whole-match formation and team shape" actions={(
               <select
                 value={tacticalTeam}
                 onChange={(event) => setTacticalTeam(event.target.value as "home" | "away" | "both")}
@@ -550,7 +562,7 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
                 <option value="away">Away</option>
                 <option value="both">Both teams</option>
               </select>
-            </div>
+            )}>
             {tactical && tactical.players.length > 0 && (tacticalTeam !== "both" || (tacticalAway && tacticalAway.players.length > 0)) ? (
               <div className="mt-5">
                 {tacticalTeam === "both" && tacticalAway ? (
@@ -577,14 +589,11 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
             ) : (
               <p className="mt-5 text-sm text-slate-500">Run detection and analysis with team assignments to view tactical data.</p>
             )}
+            </Accordion>
           </section>
 
           <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="font-semibold text-slate-100">Passing network</h2>
-                <p className="mt-1 text-sm text-slate-400">Passes estimated from stored possession events</p>
-              </div>
+            <Accordion title="Passing network" summary="Passes estimated from stored possession events" actions={(
               <select
                 value={passingTeam}
                 onChange={(event) => setPassingTeam(event.target.value as "home" | "away")}
@@ -593,7 +602,7 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
                 <option value="home">Home</option>
                 <option value="away">Away</option>
               </select>
-            </div>
+            )}>
             {passingNetwork && passingNetwork[passingTeam].edges.length === 0 ? (
               <p className="mt-5 text-sm text-slate-500">Not enough pass data for this team yet.</p>
             ) : passingNetwork ? (
@@ -623,14 +632,11 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
             ) : (
               <p className="mt-5 text-sm text-slate-500">No passing data available yet. Run match analysis first.</p>
             )}
+            </Accordion>
           </section>
 
           <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="font-semibold text-slate-100">Heatmaps</h2>
-                <p className="mt-1 text-sm text-slate-400">Movement occupancy from stored player detections</p>
-              </div>
+            <Accordion title="Heatmaps" summary="Movement occupancy from stored player detections" actions={(
               <div className="flex flex-wrap gap-2">
                 <select
                   value={heatmapMode}
@@ -672,7 +678,7 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
                   </select>
                 )}
               </div>
-            </div>
+            )}>
             {heatmapError && <p className="mt-3 text-sm text-amber-300">{heatmapError}</p>}
             {heatmap && (heatmapMode === "team"
               ? heatmapTeam === (clusterAssignments.find((item) => item.cluster_id === heatmap.team_color_cluster)?.role ?? "")
@@ -700,16 +706,11 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
             ) : (
               <p className="mt-5 text-sm text-slate-500">Run analysis and assign Home/Away clusters to view this heatmap.</p>
             )}
+            </Accordion>
           </section>
 
           <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="font-semibold text-slate-100">Match analysis</h2>
-                <p className="mt-1 text-sm text-slate-400">
-                  {analysis?.status === "processing" ? "Calculating from stored detections…" : "Possession, touches and movement estimates"}
-                </p>
-              </div>
+            <Accordion title="Match analysis" summary={analysis?.status === "processing" ? "Calculating from stored detections…" : "Possession, touches and movement estimates"} actions={(
               <button
                 type="button"
                 onClick={handleStartAnalysis}
@@ -718,7 +719,7 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
               >
                 {startingAnalysis || analysis?.status === "processing" ? "Analyzing…" : "Analyze match"}
               </button>
-            </div>
+            )}>
 
             {analysis?.status === "analyzed" && (
               <>
@@ -764,6 +765,7 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
                 )}
               </>
             )}
+            </Accordion>
           </section>
 
           <div className="grid grid-cols-2 gap-4 rounded-lg border border-slate-800 bg-slate-900/40 p-5 sm:grid-cols-4">
@@ -796,6 +798,43 @@ function seekVideo(videoElement: React.RefObject<HTMLVideoElement | null>, times
   }
 }
 
+function Accordion({
+  title,
+  summary,
+  actions,
+  children,
+}: {
+  title: string;
+  summary: string;
+  actions?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          aria-expanded={open}
+          className="flex min-w-0 flex-1 items-center gap-3 rounded-md py-1 text-left hover:bg-slate-800/50"
+        >
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-700 text-slate-400" aria-hidden="true">
+            {open ? "−" : "+"}
+          </span>
+          <span className="min-w-0">
+            <span className="block font-semibold text-slate-100">{title}</span>
+            <span className="mt-1 block text-sm text-slate-400">{summary}</span>
+          </span>
+        </button>
+        {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+      </div>
+      {open && <div className="mt-5 border-t border-slate-800 pt-5">{children}</div>}
+    </div>
+  );
+}
+
 function clipLabel(eventType: "shot" | "pass" | "possession_loss") {
   return eventType === "shot" ? "Shot" : eventType === "pass" ? "Pass" : "Possession loss";
 }
@@ -804,7 +843,7 @@ function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div>
       <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-1 font-medium text-slate-100">{value}</p>
+      <p className="mt-1 font-mono font-medium text-slate-100">{value}</p>
     </div>
   );
 }

@@ -28,7 +28,7 @@ export default function VideoUploadPanel({
   }
 
   return (
-    <div className="rounded-lg border border-dashed border-slate-700 bg-slate-900/40 p-8 text-center">
+    <div className="rounded-lg border border-dashed border-slate-700 bg-slate-900/40 p-8 text-center shadow-sm">
       <p className="mb-4 text-slate-300">No video uploaded for this match yet.</p>
 
       <label

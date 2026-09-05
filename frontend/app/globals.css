@@ -1,6 +1,117 @@
 @import "tailwindcss";
 
 @theme inline {
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-inter);
+  --font-display: var(--font-space-grotesk);
+  --font-mono: var(--font-plex-mono);
+}
+
+:root {
+  --color-bg: #17191d;
+  --color-surface: #1d2025;
+  --color-surface-raised: #24272d;
+  --color-border: #2e323a;
+  --color-text: #edeef0;
+  --color-muted: #8b909a;
+  --color-home: #d4a73d;
+  --color-away: #5b8def;
+  --color-success: #4fae7a;
+  --color-danger: #e2604f;
+}
+
+html {
+  background: var(--color-bg);
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-inter), sans-serif;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+nav,
+button,
+label {
+  font-family: var(--font-space-grotesk), sans-serif;
+}
+
+table td,
+table th,
+.font-mono,
+[data-number] {
+  font-family: var(--font-plex-mono), monospace;
+}
+
+.font-display {
+  font-family: var(--font-space-grotesk), sans-serif;
+}
+
+.bg-slate-950 { background-color: var(--color-bg); }
+.bg-slate-900 { background-color: var(--color-surface); }
+.bg-slate-800 { background-color: var(--color-surface-raised); }
+.bg-slate-900\/40 { background-color: color-mix(in srgb, var(--color-surface) 88%, transparent); }
+.bg-slate-900\/60 { background-color: color-mix(in srgb, var(--color-surface) 94%, transparent); }
+.bg-slate-950\/60 { background-color: color-mix(in srgb, var(--color-bg) 88%, transparent); }
+.bg-slate-800\/50 { background-color: color-mix(in srgb, var(--color-surface-raised) 65%, transparent); }
+.border-slate-800,
+.border-slate-700,
+.border-slate-600 { border-color: var(--color-border); }
+.divide-slate-800 > :not(:last-child) { border-color: var(--color-border); }
+.text-slate-100,
+.text-slate-200 { color: var(--color-text); }
+.text-slate-300,
+.text-slate-400,
+.text-slate-500 { color: var(--color-muted); }
+.hover\:bg-slate-800:hover { background-color: var(--color-surface-raised); }
+.hover\:bg-slate-800\/50:hover { background-color: color-mix(in srgb, var(--color-surface-raised) 65%, transparent); }
+.bg-emerald-600,
+.bg-emerald-500 { background-color: var(--color-home); color: #17191d; }
+.hover\:bg-emerald-500:hover,
+.hover\:bg-emerald-400:hover { background-color: #e2bc5e; }
+.text-emerald-300,
+.text-emerald-400,
+.text-emerald-500 { color: var(--color-home); }
+.border-emerald-700,
+.border-emerald-600 { border-color: color-mix(in srgb, var(--color-home) 65%, var(--color-border)); }
+.hover\:border-emerald-600:hover { border-color: var(--color-home); }
+.bg-emerald-950 { background-color: color-mix(in srgb, var(--color-home) 12%, var(--color-surface)); }
+.bg-emerald-900 { background-color: color-mix(in srgb, var(--color-success) 24%, var(--color-surface)); }
+.text-emerald-200 { color: #9bd3b2; }
+.bg-amber-400,
+.bg-amber-500 { background-color: var(--color-home); color: #17191d; }
+.hover\:bg-amber-300:hover { background-color: #e2bc5e; }
+.text-amber-300,
+.text-amber-200 { color: var(--color-home); }
+.bg-sky-900 { background-color: color-mix(in srgb, var(--color-away) 24%, var(--color-surface)); }
+.text-sky-300,
+.text-sky-200 { color: var(--color-away); }
+.bg-blue-900 { background-color: color-mix(in srgb, var(--color-away) 24%, var(--color-surface)); }
+.text-blue-200 { color: #a9c2ff; }
+.border-red-800 { border-color: color-mix(in srgb, var(--color-danger) 65%, var(--color-border)); }
+.bg-red-950 { background-color: color-mix(in srgb, var(--color-danger) 20%, var(--color-surface)); }
+.text-red-200,
+.text-red-300,
+.text-red-400 { color: #f0a096; }
+.bg-slate-700 { background-color: var(--color-surface-raised); }
+
+button,
+a,
+input,
+select,
+label {
+  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease, opacity 160ms ease;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--color-home);
+  outline-offset: 2px;
 }
