@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     ffprobe_binary: str = "ffprobe"
     ffmpeg_binary: str = "ffmpeg"
     detection_sample_interval_seconds: float = Field(default=0.033, gt=0)
+    # Pitch homography is a heavy extra pass (it re-decodes frames and runs a
+    # large pose model), and the camera pans slowly, so keypoints are sampled
+    # much coarser than detections; in-between detections reuse the nearest
+    # earlier frame's homography.
+    homography_sample_interval_seconds: float = Field(default=0.5, gt=0)
 
     @property
     def cors_origins_list(self) -> list[str]:

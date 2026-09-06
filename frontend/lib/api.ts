@@ -61,6 +61,47 @@ export interface MatchAnalysis {
   events: Array<{ id: number; event_type: string; timestamp_seconds: number; track_id: number | null; description: string | null }>;
 }
 
+export interface MatchPlayerStat {
+  match_player_id: number;
+  team_role: string;
+  jersey_number: number | null;
+  is_unknown: boolean;
+  label: string;
+  touches: number;
+  distance_meters: number;
+  average_speed_mps: number;
+  max_speed_mps: number;
+  passes_total: number;
+  passes_completed: number;
+  passes_short: number;
+  passes_long: number;
+  shots: number;
+  xg: number;
+  duels_total: number;
+  duels_won: number;
+  dribbles_total: number;
+  dribbles_completed: number;
+}
+
+export interface PlayerStats {
+  match_id: number;
+  players: MatchPlayerStat[];
+}
+
+export interface PlayerStatsRun extends PlayerStats {
+  identities_with_stats: number;
+  unlinked_tracks: number;
+  duels_detected: number;
+  dribbles_detected: number;
+  dribbles_successful: number;
+  passes_total: number;
+  passes_completed: number;
+  passes_short: number;
+  passes_long: number;
+  shots_assigned: number;
+  note: string;
+}
+
 export interface ClipEvent {
   event_id: number;
   event_type: "shot" | "pass" | "possession_loss";
@@ -285,6 +326,9 @@ export const api = {
   startAnalysis: (matchId: number) =>
     request<MatchAnalysis>(`/api/matches/${matchId}/analysis`, { method: "POST" }),
   getAnalysis: (matchId: number) => request<MatchAnalysis>(`/api/matches/${matchId}/analysis`),
+  startPlayerStats: (matchId: number) =>
+    request<PlayerStatsRun>(`/api/matches/${matchId}/player-stats`, { method: "POST" }),
+  getPlayerStats: (matchId: number) => request<PlayerStats>(`/api/matches/${matchId}/player-stats`),
   getHeatmap: (matchId: number, params: { mode: "team" | "player"; track_id?: number; team_color_cluster?: number }) => {
     const query = new URLSearchParams({ mode: params.mode });
     if (params.track_id !== undefined) query.set("track_id", String(params.track_id));

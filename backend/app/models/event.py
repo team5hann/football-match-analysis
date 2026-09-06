@@ -24,6 +24,12 @@ class Event(Base):
 
     event_type: Mapped[str] = mapped_column(String(50), nullable=False)
     track_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Second player involved, for events that are inherently about two players
+    # (duel: winner=track_id, loser=related_track_id; dribble: track_id=carrier,
+    # related_track_id=nearest opponent).
+    related_track_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Free-form result marker, e.g. "successful"/"unsuccessful" for dribbles.
+    outcome: Mapped[str | None] = mapped_column(String(20), nullable=True)
     timestamp_seconds: Mapped[float] = mapped_column(Float, nullable=False)
 
     # 2D pitch coordinates (0-100 normalized), populated once pitch homography exists

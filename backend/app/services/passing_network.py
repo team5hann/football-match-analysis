@@ -1,15 +1,16 @@
 from collections import Counter, defaultdict
 from math import hypot
 
+from app.services.pitch import pitch_norm
+
 
 POSSESSION_DISTANCE = 0.2
 
 
-def _center(box: dict[str, float], width: int, height: int) -> tuple[float, float]:
-    return (
-        (box["x"] + box["width"] / 2) / max(width, 1),
-        (box["y"] + box["height"] / 2) / max(height, 1),
-    )
+def _center(record: dict, width: int, height: int) -> tuple[float, float]:
+    # Pitch-normalised (0..1): real homography projection when available for the
+    # detection, otherwise box centre over image size (old behaviour).
+    return pitch_norm(record, width, height)
 
 
 def _mode(values: list[int | None]) -> int | None:
@@ -28,12 +29,12 @@ def _possession_by_time(records: list[dict], width: int, height: int) -> dict[fl
         if not players[timestamp] or not ball_records:
             ownership[timestamp] = None
             continue
-        ball_x, ball_y = _center(ball_records[0]["box"], width, height)
+        ball_x, ball_y = _center(ball_records[0], width, height)
         closest = min(
             players[timestamp],
-            key=lambda player: hypot(*(a - b for a, b in zip(_center(player["box"], width, height), (ball_x, ball_y)))),
+            key=lambda player: hypot(*(a - b for a, b in zip(_center(player, width, height), (ball_x, ball_y)))),
         )
-        player_x, player_y = _center(closest["box"], width, height)
+        player_x, player_y = _center(closest, width, height)
         ownership[timestamp] = closest["track_id"] if hypot(player_x - ball_x, player_y - ball_y) <= POSSESSION_DISTANCE else None
     return ownership
 
@@ -57,7 +58,7 @@ def build_passing_network(
     for track_id, player_records in by_track.items():
         cluster = _mode([record.get("cluster") for record in player_records])
         role = cluster_roles.get(cluster, "unknown") if cluster is not None else "unknown"
-        positions = [_center(record["box"], image_width, image_height) for record in player_records]
+        positions = [_center(record, image_width, image_height) for record in player_records]
         average_x = sum(position[0] for position in positions) / len(positions)
         average_y = sum(position[1] for position in positions) / len(positions)
         jersey_number = _mode([record.get("jersey_number") for record in player_records])

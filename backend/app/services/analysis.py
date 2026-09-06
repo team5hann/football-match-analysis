@@ -11,7 +11,9 @@ from app.models.detection import Detection
 from app.models.enums import MatchStatus, VideoStatus
 from app.models.event import Event
 from app.models.match import Match
+from app.models.player_stats import MatchPlayerStats
 from app.models.video import Video
+from app.services.pitch import pitch_xy
 from app.services.player_identity import link_map, merge_player_identities
 
 IOU_THRESHOLD = 0.15
@@ -99,18 +101,18 @@ def analyze_records(
         players = players_by_time[timestamp]
         balls = balls_by_time.get(timestamp, [])
         for player in players:
-            player_x, player_y = box_center(player["box"], image_width, image_height)
+            # Movement distance/speed use real pitch metres (homography when
+            # available, else the old image-linear estimate); possession below
+            # stays in normalised units so its 0..1 threshold keeps working.
+            metres_x, metres_y = pitch_xy(player, image_width, image_height)
             track_id = player["track_id"]
             if track_id in last_position:
                 old_timestamp, old_x, old_y = last_position[track_id]
                 elapsed = max(timestamp - old_timestamp, 0.001)
-                distance = hypot(
-                    (player_x - old_x) * PITCH_LENGTH_METERS,
-                    (player_y - old_y) * PITCH_WIDTH_METERS,
-                )
+                distance = hypot(metres_x - old_x, metres_y - old_y)
                 distances[track_id] += distance
                 speeds[track_id].append(distance / elapsed)
-            last_position[track_id] = (timestamp, player_x, player_y)
+            last_position[track_id] = (timestamp, metres_x, metres_y)
         if not balls:
             owner_by_time[timestamp] = None
             continue
@@ -200,6 +202,7 @@ def run_analysis(match_id: int, session_factory=SessionLocal) -> None:
                 "box": item.bounding_box,
                 "cluster": item.team_color_cluster,
                 "jersey_number": item.jersey_number,
+                "pitch": (item.pitch_x, item.pitch_y),
             }
             for item in detections
         ]
@@ -215,7 +218,15 @@ def run_analysis(match_id: int, session_factory=SessionLocal) -> None:
         merge_player_identities(match_id, db=db)
         match_player_by_track = link_map(db, match_id)
 
-        db.execute(delete(Event).where(Event.match_id == match_id, Event.event_type.in_(["pass", "possession_loss"])))
+        # Re-analysis invalidates every derived event and the advanced stats
+        # built from them; player-stats must be recomputed afterwards.
+        db.execute(
+            delete(Event).where(
+                Event.match_id == match_id,
+                Event.event_type.in_(["pass", "possession_loss", "duel", "dribble"]),
+            )
+        )
+        db.execute(delete(MatchPlayerStats).where(MatchPlayerStats.match_id == match_id))
         db.execute(delete(PlayerMetric).where(PlayerMetric.match_id == match_id))
         for row in result.players:
             db.add(PlayerMetric(match_id=match_id, match_player_id=match_player_by_track.get(row["track_id"]), **row))

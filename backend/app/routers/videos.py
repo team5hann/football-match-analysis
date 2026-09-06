@@ -11,8 +11,10 @@ from app.models.match import Match
 from app.models.video import Video
 from app.schemas.video import VideoRead
 from app.schemas.detection import DetectionRead, DetectionStatus
+from app.schemas.homography import HomographyStatus
 from app.services.detection import list_detections, reset_detection_data, run_detection
 from app.services.enrichment import run_enrichment
+from app.services.homography import read_homography_status, run_pitch_homography
 from app.models.detection import Detection
 from app.schemas.detection import DetectionUpdate
 from app.services.video_processing import FFprobeError, extract_video_metadata
@@ -166,6 +168,39 @@ def start_enrichment(video_id: int, background_tasks: BackgroundTasks, db: Sessi
     db.commit()
     background_tasks.add_task(run_enrichment, video_id)
     return DetectionStatus(video_id=video_id, status=_status_value(video.status), detections_count=0, detections=[])
+
+
+def _run_pitch_homography_task(video_id: int) -> None:
+    try:
+        run_pitch_homography(video_id)
+    except Exception as exc:  # background task - log, don't crash the worker
+        print(f"[homography] video {video_id} failed: {exc}", flush=True)
+
+
+@router.post("/api/videos/{video_id}/pitch-homography", response_model=HomographyStatus, status_code=202)
+def start_pitch_homography(
+    video_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
+) -> HomographyStatus:
+    """Compute a per-frame image->pitch homography and project every detection.
+
+    Extra pass on top of detection: it does not re-run object detection but it
+    DOES re-decode the video frames and run a large pose model, so it is not
+    free. Runs in the background; poll GET for progress.
+    """
+    video = db.get(Video, video_id)
+    if video is None:
+        raise HTTPException(status_code=404, detail="Video not found")
+    if not db.query(Detection).filter(Detection.video_id == video_id).first():
+        raise HTTPException(status_code=400, detail="Run detection before pitch homography")
+    background_tasks.add_task(_run_pitch_homography_task, video_id)
+    return HomographyStatus(**read_homography_status(db, video_id))
+
+
+@router.get("/api/videos/{video_id}/pitch-homography", response_model=HomographyStatus)
+def get_pitch_homography_status(video_id: int, db: Session = Depends(get_db)) -> HomographyStatus:
+    if db.get(Video, video_id) is None:
+        raise HTTPException(status_code=404, detail="Video not found")
+    return HomographyStatus(**read_homography_status(db, video_id))
 
 
 @router.patch("/api/detections/{detection_id}", response_model=DetectionRead)

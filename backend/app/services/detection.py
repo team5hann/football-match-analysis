@@ -14,7 +14,9 @@ from app.models.clip import Clip
 from app.models.detection import Detection
 from app.models.enums import MatchStatus, VideoStatus
 from app.models.event import Event
+from app.models.homography import FrameHomography
 from app.models.player_identity import MatchPlayer, TrackPlayerLink
+from app.models.player_stats import MatchPlayerStats
 from app.models.video import Video
 
 settings = get_settings()
@@ -191,7 +193,9 @@ def reset_detection_data(video_id: int, db: Session) -> Video:
     # Analysis and clips are match-level records, so invalidate them for the whole match.
     db.execute(delete(Clip).where(Clip.match_id == video.match_id))
     db.execute(delete(Event).where(Event.video_id == video_id))
+    db.execute(delete(FrameHomography).where(FrameHomography.video_id == video_id))
     db.execute(delete(PlayerMetric).where(PlayerMetric.match_id == video.match_id))
+    db.execute(delete(MatchPlayerStats).where(MatchPlayerStats.match_id == video.match_id))
     db.execute(delete(TrackPlayerLink).where(TrackPlayerLink.match_id == video.match_id))
     db.execute(delete(MatchPlayer).where(MatchPlayer.match_id == video.match_id))
     db.execute(delete(MatchAnalysisSummary).where(MatchAnalysisSummary.match_id == video.match_id))

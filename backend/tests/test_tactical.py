@@ -24,4 +24,4 @@ def test_tactical_analysis_returns_formation_metrics_and_players():
     assert result.depth > 0
     assert result.compactness > 0
     assert len(result.players) == 9
-    assert result.coordinate_note.startswith("Approximate camera coordinates")
+    assert "homography" in result.coordinate_note and "fall back" in result.coordinate_note

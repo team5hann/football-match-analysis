@@ -28,6 +28,8 @@ from app.schemas.player_option import PlayerOptionRead
 from app.services.player_options import build_player_options
 from app.schemas.player_identity import PlayerIdentitiesRead
 from app.services.player_identity import link_map, merge_player_identities, read_player_identities
+from app.schemas.player_stats import PlayerStatsRead, PlayerStatsRunRead
+from app.services.player_stats import compute_and_store_player_stats, read_player_stats
 from app.services.report import build_report_data, render_csv, render_pdf, render_xlsx
 
 router = APIRouter(prefix="/api/matches", tags=["matches"])
@@ -220,7 +222,7 @@ def get_heatmap(
         query = query.where(Detection.team_color_cluster == team_color_cluster)
     rows = db.execute(query).all()
     detections = [
-        {"bounding_box": detection.bounding_box}
+        {"bounding_box": detection.bounding_box, "pitch": (detection.pitch_x, detection.pitch_y)}
         for detection, _width, _height in rows
     ]
     width = next((width for _detection, width, _height in rows if width), 1)
@@ -235,7 +237,7 @@ def get_heatmap(
         grid_height=grid_height,
         grid=grid,
         total_observations=sum(sum(row) for row in grid),
-        coordinate_note="Approximate camera coordinates from bounding-box centers; not calibrated to the real pitch.",
+        coordinate_note="Pitch cells use the per-frame homography where available for a detection; otherwise they fall back to uncalibrated bounding-box centers.",
     )
 
 
@@ -296,6 +298,31 @@ def get_player_identities(match_id: int, db: Session = Depends(get_db)) -> Playe
     return PlayerIdentitiesRead(**read_player_identities(db, match_id))
 
 
+@router.post("/{match_id}/player-stats", response_model=PlayerStatsRunRead)
+def rebuild_player_stats(match_id: int, db: Session = Depends(get_db)) -> PlayerStatsRunRead:
+    """Compute advanced per-identity stats (passes, shots, duels, dribbles).
+
+    Post-processing on top of analysis - re-reads stored detections/events, no
+    video work. Requires analysis (track_ids + merged identities) to have run.
+    Duels and dribbles are new, unvalidated heuristics; accuracy is low.
+    """
+    match = db.get(Match, match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Match not found")
+    if not db.scalar(select(MatchAnalysisSummary.id).where(MatchAnalysisSummary.match_id == match_id)):
+        raise HTTPException(status_code=400, detail="Run match analysis before computing player stats")
+    result = compute_and_store_player_stats(match_id, db)
+    db.commit()
+    return PlayerStatsRunRead(**result)
+
+
+@router.get("/{match_id}/player-stats", response_model=PlayerStatsRead)
+def get_player_stats(match_id: int, db: Session = Depends(get_db)) -> PlayerStatsRead:
+    if db.get(Match, match_id) is None:
+        raise HTTPException(status_code=404, detail="Match not found")
+    return PlayerStatsRead(**read_player_stats(db, match_id))
+
+
 @router.get("/{match_id}/passing-network", response_model=PassingNetworkRead)
 def get_passing_network(match_id: int, db: Session = Depends(get_db)) -> PassingNetworkRead:
     match = db.get(Match, match_id)
@@ -312,7 +339,7 @@ def get_passing_network(match_id: int, db: Session = Depends(get_db)) -> Passing
     ).all()
     cluster_roles = {item.cluster_id: item.role for item in match.team_cluster_assignments}
     records = [
-        {"class": item.class_name, "track_id": item.track_id, "timestamp": item.frame_timestamp, "box": item.bounding_box, "cluster": item.team_color_cluster, "jersey_number": item.jersey_number}
+        {"class": item.class_name, "track_id": item.track_id, "timestamp": item.frame_timestamp, "box": item.bounding_box, "cluster": item.team_color_cluster, "jersey_number": item.jersey_number, "pitch": (item.pitch_x, item.pitch_y)}
         for item in detections
     ]
     event_records = [{"track_id": event.track_id, "timestamp": event.timestamp_seconds} for event in events]
@@ -322,7 +349,7 @@ def get_passing_network(match_id: int, db: Session = Depends(get_db)) -> Passing
     return PassingNetworkRead(
         home=result["home"],
         away=result["away"],
-        coordinate_note="Approximate camera coordinates from detection box centers; not calibrated to the real pitch.",
+        coordinate_note="Node positions use the per-frame homography where available for a detection; otherwise they fall back to uncalibrated box centers.",
     )
 
 
@@ -343,7 +370,7 @@ def get_tactical_analysis(
     ).all()
     cluster_roles = {item.cluster_id: item.role for item in match.team_cluster_assignments}
     records = [
-        {"class": item.class_name, "track_id": item.track_id, "timestamp": item.frame_timestamp, "box": item.bounding_box, "cluster": item.team_color_cluster, "jersey_number": item.jersey_number}
+        {"class": item.class_name, "track_id": item.track_id, "timestamp": item.frame_timestamp, "box": item.bounding_box, "cluster": item.team_color_cluster, "jersey_number": item.jersey_number, "pitch": (item.pitch_x, item.pitch_y)}
         for item in detections
         if item.track_id is not None
     ]
@@ -387,7 +414,7 @@ def run_shot_detection(match_id: int) -> None:
         detections = db.scalars(select(Detection).where(Detection.video_id == video.id).order_by(Detection.frame_timestamp, Detection.id)).all()
         cluster_roles = {item.cluster_id: item.role for item in match.team_cluster_assignments}
         records = [
-            {"class": item.class_name, "track_id": item.track_id, "timestamp": item.frame_timestamp, "box": item.bounding_box, "cluster": item.team_color_cluster}
+            {"class": item.class_name, "track_id": item.track_id, "timestamp": item.frame_timestamp, "box": item.bounding_box, "cluster": item.team_color_cluster, "pitch": (item.pitch_x, item.pitch_y)}
             for item in detections
         ]
         shots = detect_shots(
@@ -470,7 +497,7 @@ def export_match_report(match_id: int, format: str = Query("pdf", pattern="^(pdf
         detections = db.scalars(select(Detection).where(Detection.video_id == video.id).order_by(Detection.frame_timestamp, Detection.id)).all()
     cluster_roles = {item.cluster_id: item.role for item in match.team_cluster_assignments}
     records = [
-        {"class": item.class_name, "track_id": item.track_id, "timestamp": item.frame_timestamp, "box": item.bounding_box, "cluster": item.team_color_cluster, "jersey_number": item.jersey_number}
+        {"class": item.class_name, "track_id": item.track_id, "timestamp": item.frame_timestamp, "box": item.bounding_box, "cluster": item.team_color_cluster, "jersey_number": item.jersey_number, "pitch": (item.pitch_x, item.pitch_y)}
         for item in detections
     ]
     tactical = {}

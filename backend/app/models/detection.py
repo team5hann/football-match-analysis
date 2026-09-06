@@ -20,6 +20,10 @@ class Detection(Base):
     dominant_rgb: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
     jersey_number: Mapped[int | None] = mapped_column(nullable=True)
     jersey_number_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Real pitch position in metres (105 x 68), projected through this frame's
+    # homography. Null when no homography was available for the frame.
+    pitch_x: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pitch_y: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     video: Mapped["Video"] = relationship(back_populates="detections")

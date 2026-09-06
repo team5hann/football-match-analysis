@@ -24,6 +24,8 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
   const [savingClusters, setSavingClusters] = useState(false);
   const [analysis, setAnalysis] = useState<Awaited<ReturnType<typeof api.getAnalysis>> | null>(null);
   const [startingAnalysis, setStartingAnalysis] = useState(false);
+  const [playerStats, setPlayerStats] = useState<Awaited<ReturnType<typeof api.getPlayerStats>> | null>(null);
+  const [startingPlayerStats, setStartingPlayerStats] = useState(false);
   const videoElement = useRef<HTMLVideoElement>(null);
   const [heatmapMode, setHeatmapMode] = useState<"team" | "player">("team");
   const [heatmapTeam, setHeatmapTeam] = useState<"home" | "away">("home");
@@ -126,6 +128,14 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
     };
   }, [matchId]);
 
+  useEffect(() => {
+    let active = true;
+    api.getPlayerStats(matchId)
+      .then((result) => { if (active) setPlayerStats(result); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [matchId, analysis?.status]);
+
   const videoId = match?.videos[0]?.id;
   useEffect(() => {
     if (!videoId) return;
@@ -189,6 +199,18 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
       setDetectionError(err instanceof ApiError ? err.message : "Failed to start analysis");
     } finally {
       setStartingAnalysis(false);
+    }
+  }
+
+  async function handleStartPlayerStats() {
+    setStartingPlayerStats(true);
+    setDetectionError(null);
+    try {
+      setPlayerStats(await api.startPlayerStats(matchId));
+    } catch (err: unknown) {
+      setDetectionError(err instanceof ApiError ? err.message : "Failed to compute player stats");
+    } finally {
+      setStartingPlayerStats(false);
     }
   }
 
@@ -781,6 +803,78 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
                 )}
               </>
             )}
+            </Accordion>
+          </section>
+
+          <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
+            <Accordion
+              title="Player stats (merged identities)"
+              summary="Passes, shots, duels and dribbles per stitched player identity"
+              actions={(
+                <button
+                  type="button"
+                  onClick={handleStartPlayerStats}
+                  disabled={startingPlayerStats || analysis?.status !== "analyzed"}
+                  className="rounded-md bg-sky-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {startingPlayerStats ? "Computing…" : "Compute advanced stats"}
+                </button>
+              )}
+            >
+              <p className="mt-3 rounded-md border border-amber-800/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">
+                Passes and shots reuse heuristic events. <strong>Duels and dribbles are new, unvalidated
+                heuristics</strong> derived only from bounding-box positions — treat them as an
+                experimental signal, not a reliable metric.
+              </p>
+              {playerStats && playerStats.players.some((player) => (
+                player.passes_total || player.shots || player.duels_total || player.dribbles_total || player.touches
+              )) ? (
+                <div className="mt-4 overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                    <thead className="text-xs uppercase tracking-wide text-slate-500">
+                      <tr>
+                        <th className="pb-2 font-medium">Player</th>
+                        <th className="pb-2 font-medium">Touches</th>
+                        <th className="pb-2 font-medium">Distance</th>
+                        <th className="pb-2 font-medium">Passes (short/long)</th>
+                        <th className="pb-2 font-medium">Shots (xG)</th>
+                        <th className="pb-2 font-medium">Duels</th>
+                        <th className="pb-2 font-medium">Dribbles</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {playerStats.players
+                        .filter((player) => (
+                          player.passes_total || player.shots || player.duels_total || player.dribbles_total || player.touches
+                        ))
+                        .sort((a, b) => (
+                          (b.passes_total + b.shots + b.duels_total + b.dribbles_total)
+                          - (a.passes_total + a.shots + a.duels_total + a.dribbles_total)
+                        ))
+                        .map((player) => (
+                          <tr key={player.match_player_id} className="border-t border-slate-800 text-slate-300">
+                            <td className="py-2">{player.label}</td>
+                            <td className="py-2">{player.touches}</td>
+                            <td className="py-2">{player.distance_meters.toFixed(1)} m</td>
+                            <td className="py-2">
+                              {player.passes_completed}/{player.passes_total}
+                              <span className="text-slate-500"> ({player.passes_short}/{player.passes_long})</span>
+                            </td>
+                            <td className="py-2">{player.shots}<span className="text-slate-500"> ({player.xg.toFixed(2)})</span></td>
+                            <td className="py-2">{player.duels_won}/{player.duels_total}</td>
+                            <td className="py-2">{player.dribbles_completed}/{player.dribbles_total}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="mt-4 text-sm text-slate-500">
+                  {analysis?.status === "analyzed"
+                    ? "Run \"Compute advanced stats\" to populate this table."
+                    : "Analyze the match first."}
+                </p>
+              )}
             </Accordion>
           </section>
 

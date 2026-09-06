@@ -2,6 +2,8 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from math import hypot
 
+from app.services.pitch import pitch_norm
+
 
 @dataclass
 class TacticalResult:
@@ -14,11 +16,10 @@ class TacticalResult:
     coordinate_note: str
 
 
-def _center(box: dict[str, float], image_width: int, image_height: int) -> tuple[float, float]:
-    return (
-        (box["x"] + box["width"] / 2) / max(image_width, 1),
-        (box["y"] + box["height"] / 2) / max(image_height, 1),
-    )
+def _center(record: dict, image_width: int, image_height: int) -> tuple[float, float]:
+    # Pitch-normalised (0..1) position: real homography projection when the
+    # pitch pass has run, else box centre over image size (old behaviour).
+    return pitch_norm(record, image_width, image_height)
 
 
 def _mode(values: list[int | None]) -> int | None:
@@ -71,7 +72,7 @@ def calculate_tactical(
 
     players = []
     for track_id, player_records in sorted(by_track.items()):
-        positions = [_center(record["box"], image_width, image_height) for record in player_records]
+        positions = [_center(record, image_width, image_height) for record in player_records]
         average_x = sum(position[0] for position in positions) / len(positions)
         average_y = sum(position[1] for position in positions) / len(positions)
         jersey_number = _mode([record.get("jersey_number") for record in player_records])
@@ -94,7 +95,7 @@ def calculate_tactical(
     depth = max(player["average_y"] for player in players) - min(player["average_y"] for player in players)
     pair_distances = []
     for timestamp_players in by_timestamp.values():
-        positions = [_center(record["box"], image_width, image_height) for record in timestamp_players]
+        positions = [_center(record, image_width, image_height) for record in timestamp_players]
         for index, first in enumerate(positions):
             pair_distances.extend(hypot(first[0] - second[0], first[1] - second[1]) for second in positions[index + 1 :])
     compactness = sum(pair_distances) / len(pair_distances) if pair_distances else 0
@@ -110,4 +111,8 @@ def calculate_tactical(
 
 
 def _coordinate_note() -> str:
-    return "Approximate camera coordinates from detection box centers; not calibrated to the real pitch. Formation is a rough whole-video average, not time-varying."
+    return (
+        "Positions use the per-frame pitch homography where it was available for "
+        "that detection, otherwise they fall back to uncalibrated box centres. "
+        "Formation is a rough whole-video average, not time-varying."
+    )
