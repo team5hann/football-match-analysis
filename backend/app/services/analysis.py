@@ -12,6 +12,7 @@ from app.models.enums import MatchStatus, VideoStatus
 from app.models.event import Event
 from app.models.match import Match
 from app.models.video import Video
+from app.services.player_identity import link_map, merge_player_identities
 
 IOU_THRESHOLD = 0.15
 POSSESSION_DISTANCE = 0.2
@@ -206,10 +207,18 @@ def run_analysis(match_id: int, session_factory=SessionLocal) -> None:
         for item in detections:
             if item.id in result.track_ids:
                 item.track_id = result.track_ids[item.id]
+        db.flush()  # persist track_ids so the identity merge sees them
+
+        # Stitch the fresh track_ids into whole-match player identities, then tag
+        # each per-track metric row with the identity it belongs to so callers
+        # can aggregate touches/distance/etc. across a player's split tracks.
+        merge_player_identities(match_id, db=db)
+        match_player_by_track = link_map(db, match_id)
+
         db.execute(delete(Event).where(Event.match_id == match_id, Event.event_type.in_(["pass", "possession_loss"])))
         db.execute(delete(PlayerMetric).where(PlayerMetric.match_id == match_id))
         for row in result.players:
-            db.add(PlayerMetric(match_id=match_id, **row))
+            db.add(PlayerMetric(match_id=match_id, match_player_id=match_player_by_track.get(row["track_id"]), **row))
         for event in result.events:
             db.add(Event(match_id=match_id, event_type=event["event_type"], timestamp_seconds=event["timestamp_seconds"], track_id=event["track_id"], video_id=event["video_id"], description=event["description"], manually_verified=False))
         summary = db.scalar(select(MatchAnalysisSummary).where(MatchAnalysisSummary.match_id == match_id))

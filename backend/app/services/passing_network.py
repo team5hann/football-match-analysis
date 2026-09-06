@@ -44,8 +44,10 @@ def build_passing_network(
     image_width: int,
     image_height: int,
     cluster_roles: dict[int, str] | None = None,
+    match_player_by_track: dict[int, int] | None = None,
 ) -> dict[str, dict]:
     cluster_roles = cluster_roles or {}
+    match_player_by_track = match_player_by_track or {}
     by_track: dict[int, list[dict]] = defaultdict(list)
     for record in records:
         if record["class"] == "player" and record.get("track_id") is not None:
@@ -61,6 +63,10 @@ def build_passing_network(
         jersey_number = _mode([record.get("jersey_number") for record in player_records])
         nodes[track_id] = {
             "track_id": track_id,
+            # Whole-match identity this track belongs to, when available. The
+            # graph is still built per track_id; callers may group nodes/edges
+            # by this to show one node per stitched player.
+            "match_player_id": match_player_by_track.get(track_id),
             "team_role": role,
             "jersey_number": jersey_number,
             "label": f"#{jersey_number}" if jersey_number is not None else f"Unknown #{track_id}",

@@ -3,6 +3,7 @@ from pydantic import BaseModel
 
 class TacticalPlayerRead(BaseModel):
     track_id: int
+    match_player_id: int | None = None
     jersey_number: int | None
     label: str
     average_x: float

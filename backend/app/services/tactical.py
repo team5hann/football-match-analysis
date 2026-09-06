@@ -53,8 +53,10 @@ def calculate_tactical(
     image_width: int,
     image_height: int,
     cluster_roles: dict[int, str] | None = None,
+    match_player_by_track: dict[int, int] | None = None,
 ) -> TacticalResult:
     cluster_roles = cluster_roles or {}
+    match_player_by_track = match_player_by_track or {}
     team_records = [
         record
         for record in records
@@ -76,6 +78,7 @@ def calculate_tactical(
         players.append(
             {
                 "track_id": track_id,
+                "match_player_id": match_player_by_track.get(track_id),
                 "jersey_number": jersey_number,
                 "label": f"#{jersey_number}" if jersey_number is not None else f"Unknown #{track_id}",
                 "average_x": round(average_x, 4),

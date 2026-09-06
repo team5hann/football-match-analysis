@@ -9,8 +9,10 @@ def mode_or_none(values: list[int | None]) -> int | None:
 def build_player_options(
     records: list[dict],
     cluster_roles: dict[int, str] | None = None,
+    match_player_by_track: dict[int, int] | None = None,
 ) -> list[dict]:
     cluster_roles = cluster_roles or {}
+    match_player_by_track = match_player_by_track or {}
     grouped: dict[int, list[dict]] = {}
     for record in records:
         track_id = record.get("track_id")
@@ -26,6 +28,9 @@ def build_player_options(
         options.append(
             {
                 "track_id": track_id,
+                # Whole-match identity this track was merged into, when the
+                # identity layer has been built for the match (else None).
+                "match_player_id": match_player_by_track.get(track_id),
                 "team_color_cluster": cluster,
                 "team_role": role,
                 "jersey_number": jersey_number,

@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.database import SessionLocal, get_db
 from app.models.match import Match
 from app.models.detection import Detection
+from app.models.player_identity import TrackPlayerLink
 from app.models.team_cluster import TeamClusterAssignment
 from app.models.video import Video
 from app.models.analysis import MatchAnalysisSummary, PlayerMetric
@@ -25,6 +26,8 @@ from app.schemas.shots import ShotRead, ShotsRead
 from app.services.shots import detect_shots
 from app.schemas.player_option import PlayerOptionRead
 from app.services.player_options import build_player_options
+from app.schemas.player_identity import PlayerIdentitiesRead
+from app.services.player_identity import link_map, merge_player_identities, read_player_identities
 from app.services.report import build_report_data, render_csv, render_pdf, render_xlsx
 
 router = APIRouter(prefix="/api/matches", tags=["matches"])
@@ -174,6 +177,7 @@ def get_heatmap(
     match_id: int,
     mode: str = Query("team", pattern="^(team|player)$"),
     track_id: int | None = Query(None, ge=1),
+    match_player_id: int | None = Query(None, ge=1),
     team_color_cluster: int | None = Query(None, ge=0, le=2),
     grid_width: int = Query(20, ge=1, le=100),
     grid_height: int = Query(12, ge=1, le=100),
@@ -182,10 +186,25 @@ def get_heatmap(
     match = db.get(Match, match_id)
     if match is None:
         raise HTTPException(status_code=404, detail="Match not found")
-    if mode == "player" and track_id is None:
-        raise HTTPException(status_code=400, detail="track_id is required for player heatmaps")
+    if mode == "player" and track_id is None and match_player_id is None:
+        raise HTTPException(status_code=400, detail="track_id or match_player_id is required for player heatmaps")
     if mode == "team" and team_color_cluster is None:
         raise HTTPException(status_code=400, detail="team_color_cluster is required for team heatmaps")
+
+    # A whole-match identity spans several tracks; aggregate over all of them.
+    player_track_ids: list[int] | None = None
+    if mode == "player" and match_player_id is not None:
+        player_track_ids = [
+            link.track_id
+            for link in db.scalars(
+                select(TrackPlayerLink).where(
+                    TrackPlayerLink.match_id == match_id,
+                    TrackPlayerLink.match_player_id == match_player_id,
+                )
+            ).all()
+        ]
+        if track_id is not None:
+            player_track_ids = [tid for tid in player_track_ids if tid == track_id]
 
     query = (
         select(Detection, Video.width, Video.height)
@@ -193,7 +212,10 @@ def get_heatmap(
         .where(Video.match_id == match_id, Detection.class_name == "player")
     )
     if mode == "player":
-        query = query.where(Detection.track_id == track_id)
+        if player_track_ids is not None:
+            query = query.where(Detection.track_id.in_(player_track_ids or [-1]))
+        else:
+            query = query.where(Detection.track_id == track_id)
     else:
         query = query.where(Detection.team_color_cluster == team_color_cluster)
     rows = db.execute(query).all()
@@ -207,6 +229,7 @@ def get_heatmap(
     return HeatmapRead(
         mode=mode,
         track_id=track_id,
+        match_player_id=match_player_id,
         team_color_cluster=team_color_cluster,
         grid_width=grid_width,
         grid_height=grid_height,
@@ -236,7 +259,41 @@ def list_detected_players(match_id: int, db: Session = Depends(get_db)) -> list[
         }
         for detection, _video_id in detections
     ]
-    return [PlayerOptionRead.model_validate(option) for option in build_player_options(records, cluster_roles)]
+    match_player_by_track = link_map(db, match_id)
+    return [
+        PlayerOptionRead.model_validate(option)
+        for option in build_player_options(records, cluster_roles, match_player_by_track)
+    ]
+
+
+@router.post("/{match_id}/player-identities", response_model=PlayerIdentitiesRead)
+def rebuild_player_identities(match_id: int, db: Session = Depends(get_db)) -> PlayerIdentitiesRead:
+    """Stitch short tracking segments into whole-match player identities.
+
+    Post-processing only - it re-reads existing detections (Phase 4 track_id +
+    Phase 3/5a jersey numbers) and does not touch the video. Requires analysis
+    to have assigned track_ids first.
+    """
+    match = db.get(Match, match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Match not found")
+    has_tracks = db.scalar(
+        select(Detection.id)
+        .join(Video, Detection.video_id == Video.id)
+        .where(Video.match_id == match_id, Detection.class_name == "player", Detection.track_id.is_not(None))
+    )
+    if not has_tracks:
+        raise HTTPException(status_code=400, detail="Run match analysis before merging player identities")
+    result = merge_player_identities(match_id, db=db)
+    db.commit()
+    return PlayerIdentitiesRead(**result)
+
+
+@router.get("/{match_id}/player-identities", response_model=PlayerIdentitiesRead)
+def get_player_identities(match_id: int, db: Session = Depends(get_db)) -> PlayerIdentitiesRead:
+    if db.get(Match, match_id) is None:
+        raise HTTPException(status_code=404, detail="Match not found")
+    return PlayerIdentitiesRead(**read_player_identities(db, match_id))
 
 
 @router.get("/{match_id}/passing-network", response_model=PassingNetworkRead)
@@ -259,7 +316,9 @@ def get_passing_network(match_id: int, db: Session = Depends(get_db)) -> Passing
         for item in detections
     ]
     event_records = [{"track_id": event.track_id, "timestamp": event.timestamp_seconds} for event in events]
-    result = build_passing_network(records, event_records, video.width or 1, video.height or 1, cluster_roles)
+    result = build_passing_network(
+        records, event_records, video.width or 1, video.height or 1, cluster_roles, link_map(db, match_id)
+    )
     return PassingNetworkRead(
         home=result["home"],
         away=result["away"],
@@ -288,7 +347,9 @@ def get_tactical_analysis(
         for item in detections
         if item.track_id is not None
     ]
-    result = calculate_tactical(records, team, video.width or 1, video.height or 1, cluster_roles)
+    result = calculate_tactical(
+        records, team, video.width or 1, video.height or 1, cluster_roles, link_map(db, match_id)
+    )
     return TacticalRead(
         team_role=result.team_role,
         formation=result.formation,

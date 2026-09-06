@@ -24,6 +24,11 @@ class PlayerMetric(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     match_id: Mapped[int] = mapped_column(ForeignKey("matches.id", ondelete="CASCADE"), index=True)
     track_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Whole-match player identity this metric row belongs to, when the identity
+    # merge (player_identity service) has been run for the match.
+    match_player_id: Mapped[int | None] = mapped_column(
+        ForeignKey("match_players.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     team_color_cluster: Mapped[int | None] = mapped_column(nullable=True)
     jersey_number: Mapped[int | None] = mapped_column(nullable=True)
     touches: Mapped[int] = mapped_column(Integer, default=0)

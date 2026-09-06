@@ -3,6 +3,7 @@ from pydantic import BaseModel
 
 class PassingNetworkNode(BaseModel):
     track_id: int
+    match_player_id: int | None = None
     team_role: str
     jersey_number: int | None
     label: str
