@@ -36,7 +36,7 @@ def test_detection_stores_player_detections(client, tmp_path):
     assert body["detections_count"] >= 1
     assert body["detections"][0]["class"] == "player"
     assert body["detections"][0]["bounding_box"] == {"x": 10.0, "y": 20.0, "width": 50.0, "height": 80.0}
-    assert body["detections"][1]["frame_timestamp"] == 0.1
+    assert body["detections"][1]["frame_timestamp"] == 0.033
 
 
 def test_detection_stores_specialized_ball_detections(client, tmp_path):
@@ -68,31 +68,32 @@ class FakeTensor:
 
 
 class FakeYoloModel:
-    def __call__(self, frame_path: str, verbose: bool = False):
-        assert Path(frame_path).suffix == ".jpg"
-        return [
-            SimpleNamespace(
-                boxes=SimpleNamespace(
-                    xyxy=FakeTensor([[10, 20, 60, 100]]),
-                    conf=FakeTensor([0.91]),
-                    cls=FakeTensor([0]),
+    box = ([10, 20, 60, 100], 0.91, 0)
+
+    def to(self, device: str):
+        return self
+
+    def __call__(self, source, verbose: bool = False, **kwargs):
+        # run_detection now passes a batch (list of paths); tolerate a single path too.
+        paths = source if isinstance(source, list) else [source]
+        results = []
+        for frame_path in paths:
+            assert Path(frame_path).suffix == ".jpg"
+            xyxy, conf, cls = self.box
+            results.append(
+                SimpleNamespace(
+                    boxes=SimpleNamespace(
+                        xyxy=FakeTensor([xyxy]),
+                        conf=FakeTensor([conf]),
+                        cls=FakeTensor([cls]),
+                    )
                 )
             )
-        ]
+        return results
 
 
-class FakeBallYoloModel:
-    def __call__(self, frame_path: str, verbose: bool = False):
-        assert Path(frame_path).suffix == ".jpg"
-        return [
-            SimpleNamespace(
-                boxes=SimpleNamespace(
-                    xyxy=FakeTensor([[120, 80, 128, 88]]),
-                    conf=FakeTensor([0.87]),
-                    cls=FakeTensor([0]),
-                )
-            )
-        ]
+class FakeBallYoloModel(FakeYoloModel):
+    box = ([120, 80, 128, 88], 0.87, 0)
 
 
 def _make_test_video(tmp_path: Path) -> Path:

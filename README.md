@@ -69,7 +69,7 @@ docker compose up --build
 Uploaded videos persist in the `video_storage` Docker volume; Postgres data in
 `postgres_data`.
 
-Detection sampling defaults to 10 FPS (`0.1` seconds). Override it with the
+Detection sampling defaults to approximately 30 FPS (`0.033` seconds). Override it with the
 `DETECTION_SAMPLE_INTERVAL_SECONDS` environment variable, for example
 `DETECTION_SAMPLE_INTERVAL_SECONDS=0.2` for 5 FPS. To discard existing detections,
 events, clips, and match-level analysis and run detection again, call

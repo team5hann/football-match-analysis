@@ -4,7 +4,19 @@ from types import SimpleNamespace
 import numpy as np
 from PIL import Image
 
-from app.services.enrichment import run_enrichment
+from app.services.enrichment import assign_cluster_roles, run_enrichment
+
+
+def test_assign_cluster_roles_matches_home_color_and_rejects_unclear_cluster():
+    assignments = assign_cluster_roles(
+        {0: [220, 35, 35], 1: [120, 120, 120]},
+        "#FF0000",
+        "#0000FF",
+    )
+
+    assert assignments[0].role == "home"
+    assert assignments[0].similarity > 0.8
+    assert 1 not in assignments
 
 
 def test_enrichment_assigns_color_clusters_and_ocr_numbers(tmp_path):
@@ -20,7 +32,7 @@ def test_enrichment_assigns_color_clusters_and_ocr_numbers(tmp_path):
             jersey_number_confidence=None,
         ),
         SimpleNamespace(
-            frame_timestamp=1,
+            frame_timestamp=0.033,
             bounding_box={"x": 20, "y": 10, "width": 40, "height": 80},
             dominant_rgb=None,
             team_color_cluster=None,

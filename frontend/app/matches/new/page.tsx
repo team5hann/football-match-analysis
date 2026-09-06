@@ -13,6 +13,8 @@ export default function NewMatchPage() {
   const [name, setName] = useState("");
   const [competition, setCompetition] = useState("");
   const [matchDate, setMatchDate] = useState("");
+  const [homeTeamColor, setHomeTeamColor] = useState("#D4A73D");
+  const [awayTeamColor, setAwayTeamColor] = useState("#5B8DEF");
 
   const [homeTeamId, setHomeTeamId] = useState<string>(NEW_TEAM_VALUE);
   const [homeTeamName, setHomeTeamName] = useState("");
@@ -51,6 +53,8 @@ export default function NewMatchPage() {
         match_date: matchDate ? new Date(matchDate).toISOString() : undefined,
         home_team_id: homeId,
         away_team_id: awayId,
+        home_team_color: homeTeamColor,
+        away_team_color: awayTeamColor,
       });
 
       if (file) {
@@ -89,6 +93,11 @@ export default function NewMatchPage() {
             newName={awayTeamName}
             onNewName={setAwayTeamName}
           />
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <KitColorField label="Home kit color" value={homeTeamColor} onChange={setHomeTeamColor} />
+          <KitColorField label="Away kit color" value={awayTeamColor} onChange={setAwayTeamColor} />
         </div>
 
         <Field label="Match name (optional)">
@@ -237,5 +246,17 @@ function TeamField({
         />
       )}
     </Field>
+  );
+}
+
+function KitColorField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <label className="flex items-center justify-between rounded-md border border-slate-700 bg-slate-900/40 px-3 py-2.5">
+      <span>
+        <span className="block text-sm font-medium text-slate-300">{label}</span>
+        <span className="font-mono text-xs text-slate-500">{value.toUpperCase()}</span>
+      </span>
+      <input type="color" value={value} onChange={(event) => onChange(event.target.value)} className="h-9 w-12 cursor-pointer rounded border-0 bg-transparent p-0" />
+    </label>
   );
 }

@@ -215,7 +215,15 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
     setClusterAssignments((current) => {
       if (!role) return current.filter((item) => item.cluster_id !== clusterId);
       const existing = current.find((item) => item.cluster_id === clusterId);
-      const assignment = existing ?? { id: 0, cluster_id: clusterId, role, team_id: null, detections_count: 0 };
+      const assignment = existing ?? {
+        id: 0,
+        cluster_id: clusterId,
+        role,
+        team_id: null,
+        detections_count: 0,
+        assignment_source: "manual" as const,
+        similarity: null,
+      };
       return [...current.filter((item) => item.cluster_id !== clusterId), { ...assignment, role }];
     });
   }
@@ -417,9 +425,17 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
                       const count = detection.detections.filter(
                         (item) => item.class === "player" && item.team_color_cluster === cluster
                       ).length;
+                      const automatic = assignment?.assignment_source === "automatic";
                       return (
                         <label key={cluster} className="flex items-center justify-between gap-3 text-sm text-slate-300">
-                          <span>Cluster {cluster} ({count} players)</span>
+                          <span>
+                            Cluster {cluster} ({count} players)
+                            {automatic && (
+                              <span className="ml-2 text-xs text-emerald-300">
+                                Auto · {Math.round((assignment.similarity ?? 0) * 100)}% match
+                              </span>
+                            )}
+                          </span>
                           <select
                             value={assignment?.role ?? ""}
                             onChange={(event) => setClusterRole(cluster, event.target.value as "" | TeamClusterRole)}

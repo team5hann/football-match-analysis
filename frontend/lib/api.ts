@@ -39,6 +39,8 @@ export interface TeamClusterAssignment {
   role: TeamClusterRole;
   team_id: number | null;
   detections_count: number;
+  assignment_source: "automatic" | "manual";
+  similarity: number | null;
 }
 
 export interface PlayerMetric {
@@ -187,6 +189,8 @@ export interface Match {
   match_date: string | null;
   home_score: number | null;
   away_score: number | null;
+  home_team_color: string | null;
+  away_team_color: string | null;
   status: MatchStatus;
   created_at: string;
   updated_at: string;
@@ -253,6 +257,8 @@ export const api = {
     away_team_id?: number;
     competition?: string;
     match_date?: string;
+    home_team_color?: string;
+    away_team_color?: string;
   }) => request<MatchDetail>("/api/matches", { method: "POST", body: JSON.stringify(data) }),
   deleteMatch: (id: number) => request<void>(`/api/matches/${id}`, { method: "DELETE" }),
 

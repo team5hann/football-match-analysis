@@ -106,6 +106,8 @@ def list_team_clusters(match_id: int, db: Session = Depends(get_db)) -> list[Tea
                 role=assignment.role,
                 team_id=assignment.team_id,
                 detections_count=count or 0,
+                assignment_source=assignment.assignment_source,
+                similarity=assignment.similarity,
             )
         )
     return result
@@ -128,6 +130,8 @@ def save_team_clusters(
             db.add(assignment)
         assignment.role = item.role
         assignment.team_id = item.team_id
+        assignment.assignment_source = "manual"
+        assignment.similarity = None
     db.commit()
     return list_team_clusters(match_id, db)
 

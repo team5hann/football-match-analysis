@@ -15,6 +15,8 @@ class TeamClusterAssignment(Base):
     cluster_id: Mapped[int] = mapped_column(Integer, nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
     team_id: Mapped[int | None] = mapped_column(ForeignKey("teams.id", ondelete="SET NULL"), nullable=True)
+    assignment_source: Mapped[str] = mapped_column(String(20), default="manual", nullable=False)
+    similarity: Mapped[float | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     match: Mapped["Match"] = relationship(back_populates="team_cluster_assignments")

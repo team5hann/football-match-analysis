@@ -10,3 +10,5 @@ class TeamClusterAssignmentUpdate(BaseModel):
 class TeamClusterAssignmentRead(TeamClusterAssignmentUpdate):
     id: int
     detections_count: int = 0
+    assignment_source: str = "manual"
+    similarity: float | None = None

@@ -1,6 +1,8 @@
 import re
 import tempfile
 from collections.abc import Callable
+from dataclasses import dataclass
+from math import sqrt
 from pathlib import Path
 
 import numpy as np
@@ -12,10 +14,76 @@ from app.core.database import SessionLocal
 from app.core.config import get_settings
 from app.models.detection import Detection
 from app.models.enums import MatchStatus, VideoStatus
+from app.models.team_cluster import TeamClusterAssignment
 from app.models.video import Video
 from app.services.detection import extract_frames
 
 settings = get_settings()
+COLOR_SIMILARITY_THRESHOLD = 0.70
+COLOR_AMBIGUITY_MARGIN = 0.12
+
+
+@dataclass(frozen=True)
+class AutomaticClusterAssignment:
+    role: str
+    similarity: float
+
+
+def assign_cluster_roles(
+    cluster_colors_by_id: dict[int, list[float]],
+    home_color: str | None,
+    away_color: str | None,
+) -> dict[int, AutomaticClusterAssignment]:
+    """Assign only clusters with a clear, sufficiently close kit-color match."""
+    targets = {"home": _hex_to_rgb(home_color), "away": _hex_to_rgb(away_color)}
+    targets = {role: color for role, color in targets.items() if color is not None}
+    if not targets:
+        return {}
+
+    candidates: dict[int, AutomaticClusterAssignment] = {}
+    for cluster_id, cluster_color in cluster_colors_by_id.items():
+        ranked = sorted(
+            (
+                (similarity, role)
+                for role, target in targets.items()
+                if (similarity := _rgb_similarity(cluster_color, target)) is not None
+            ),
+            reverse=True,
+        )
+        if not ranked:
+            continue
+        best_similarity, best_role = ranked[0]
+        second_similarity = ranked[1][0] if len(ranked) > 1 else 0.0
+        if best_similarity >= COLOR_SIMILARITY_THRESHOLD and best_similarity - second_similarity >= COLOR_AMBIGUITY_MARGIN:
+            candidates[cluster_id] = AutomaticClusterAssignment(best_role, round(best_similarity, 4))
+
+    # More than one similarly close cluster for one team is not safe to resolve automatically.
+    for role in targets:
+        same_role = sorted(
+            ((cluster_id, assignment) for cluster_id, assignment in candidates.items() if assignment.role == role),
+            key=lambda item: item[1].similarity,
+            reverse=True,
+        )
+        if len(same_role) > 1 and same_role[0][1].similarity - same_role[1][1].similarity < COLOR_AMBIGUITY_MARGIN:
+            for cluster_id, _ in same_role:
+                candidates.pop(cluster_id, None)
+        elif len(same_role) > 1:
+            for cluster_id, _ in same_role[1:]:
+                candidates.pop(cluster_id, None)
+    return candidates
+
+
+def _hex_to_rgb(value: str | None) -> tuple[float, float, float] | None:
+    if value is None or not re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+        return None
+    return tuple(int(value[index : index + 2], 16) for index in (1, 3, 5))
+
+
+def _rgb_similarity(first: list[float], second: tuple[float, float, float] | None) -> float | None:
+    if second is None or len(first) != 3:
+        return None
+    distance = sqrt(sum((float(value) - target) ** 2 for value, target in zip(first, second)))
+    return max(0.0, 1.0 - distance / 441.673)
 
 
 def dominant_torso_rgb(image: np.ndarray, bounding_box: dict[str, float]) -> list[int] | None:
@@ -135,6 +203,21 @@ def run_enrichment(
             for detection, label in zip(enriched, labels):
                 detection.team_color_cluster = label
 
+            cluster_colors_by_id = {
+                cluster_id: [
+                    float(np.mean([color[channel] for color, item_label in zip(colors, labels) if item_label == cluster_id]))
+                    for channel in range(3)
+                ]
+                for cluster_id in set(labels)
+            }
+            automatic_assignments = assign_cluster_roles(
+                cluster_colors_by_id,
+                video.match.home_team_color,
+                video.match.away_team_color,
+            )
+            if video.match.home_team_color or video.match.away_team_color:
+                _save_automatic_assignments(db, video, automatic_assignments)
+
         video.status = VideoStatus.ANALYZED
         video.match.status = MatchStatus.ANALYZED
         db.commit()
@@ -146,3 +229,30 @@ def run_enrichment(
         db.commit()
     finally:
         db.close()
+
+
+def _save_automatic_assignments(
+    db: Session, video: Video, assignments: dict[int, AutomaticClusterAssignment]
+) -> None:
+    existing = {
+        item.cluster_id: item
+        for item in db.scalars(
+            select(TeamClusterAssignment).where(TeamClusterAssignment.match_id == video.match_id)
+        ).all()
+    }
+    for assignment in existing.values():
+        if assignment.assignment_source == "automatic":
+            db.delete(assignment)
+    for cluster_id, automatic in assignments.items():
+        if cluster_id in existing and existing[cluster_id].assignment_source == "manual":
+            continue
+        db.add(
+            TeamClusterAssignment(
+                match_id=video.match_id,
+                cluster_id=cluster_id,
+                role=automatic.role,
+                team_id=(video.match.home_team_id if automatic.role == "home" else video.match.away_team_id),
+                assignment_source="automatic",
+                similarity=automatic.similarity,
+            )
+        )

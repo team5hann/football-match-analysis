@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     ffprobe_binary: str = "ffprobe"
     ffmpeg_binary: str = "ffmpeg"
-    detection_sample_interval_seconds: float = Field(default=0.1, gt=0)
+    detection_sample_interval_seconds: float = Field(default=0.033, gt=0)
 
     @property
     def cors_origins_list(self) -> list[str]:
