@@ -29,6 +29,10 @@ class MatchPlayerStats(Base):
     passes_completed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     passes_short: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     passes_long: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # completed counts split by length, so a short and a long completion rate can
+    # be shown separately (not just the overall completed total).
+    passes_short_completed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    passes_long_completed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     shots: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     xg: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)

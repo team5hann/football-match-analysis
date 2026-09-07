@@ -61,6 +61,8 @@ class _PlayerStatRow:
     passes_completed: int = 0
     passes_short: int = 0
     passes_long: int = 0
+    passes_short_completed: int = 0
+    passes_long_completed: int = 0
     shots: int = 0
     xg: float = 0.0
     duels_total: int = 0
@@ -79,6 +81,9 @@ class AdvancedStatsResult:
     player_rows: list[dict] = field(default_factory=list)          # per track_id
     duel_events: list[dict] = field(default_factory=list)
     dribble_events: list[dict] = field(default_factory=list)
+    # one entry per attempted pass, keyed by sender track_id, with pitch-metre
+    # start/end positions - used to draw per-player pass maps.
+    pass_attempts: list[dict] = field(default_factory=list)
 
 
 def _as_record(record_or_box: dict) -> dict:
@@ -111,6 +116,7 @@ def compute_advanced_stats(
     """
     cluster_roles = cluster_roles or {}
     rows: dict[int, _PlayerStatRow] = {}
+    pass_attempts: list[dict] = []
 
     def row(track_id: int | None) -> _PlayerStatRow | None:
         if track_id is None:
@@ -156,11 +162,34 @@ def compute_advanced_stats(
                 return player
         return None
 
+    def player_near(track_id: int, timestamp: float) -> dict | None:
+        """The track's detection at ``timestamp``, else the closest one to it."""
+        exact = player_at(track_id, timestamp)
+        if exact is not None:
+            return exact
+        best: dict | None = None
+        best_gap = float("inf")
+        for ts in timestamps:
+            gap = abs(ts - timestamp)
+            if gap >= best_gap:
+                continue
+            candidate = player_at(track_id, ts)
+            if candidate is not None:
+                best, best_gap = candidate, gap
+        return best
+
     # --- 1) passes --------------------------------------------------------------
     for event in sorted(pass_events, key=lambda item: item["timestamp"]):
         timestamp = event["timestamp"]
         recipient_track = event.get("track_id")
-        sender = last_owner_before(timestamp)
+        # Prefer the sender the debounced analysis recorded with the event; only
+        # fall back to "whoever was nearest the ball just before" when it is
+        # missing (e.g. events written by an older analysis run).
+        sender_track = event.get("sender_track_id")
+        if sender_track is not None:
+            sender = player_near(sender_track, timestamp)
+        else:
+            sender = last_owner_before(timestamp)
         if sender is None:
             continue
         sender_row = row(sender.get("track_id"))
@@ -168,30 +197,49 @@ def compute_advanced_stats(
             continue
 
         # distance sender -> the player who ended up with the ball
-        recipient_box = None
         recipient = player_at(recipient_track, timestamp) if recipient_track is not None else None
-        if recipient is not None:
-            recipient_box = recipient["box"]
-        if recipient_box is None:
+        if recipient is None:
             # fall back to the ball position at the event time
             balls = balls_by_time.get(timestamp, [])
-            recipient_box = balls[0]["box"] if balls else sender["box"]
-        sx, sy = _pitch(sender["box"], image_width, image_height)
-        rx, ry = _pitch(recipient_box, image_width, image_height)
+            recipient = balls[0] if balls else sender
+        sx, sy = _pitch(sender, image_width, image_height)
+        rx, ry = _pitch(recipient, image_width, image_height)
         distance = hypot(rx - sx, ry - sy)
-
-        sender_row.passes_total += 1
-        if distance < SHORT_PASS_MAX_METERS:
-            sender_row.passes_short += 1
-        else:
-            sender_row.passes_long += 1
+        is_short = distance < SHORT_PASS_MAX_METERS
         # A "pass" event means possession stayed with the same team -> completed.
         # A "possession_loss" is booked as a FAILED pass for the player who had
         # the ball. This deliberately over-simplifies: the turnover may really
         # have been a tackle, foul or miscontrol rather than a bad pass, but
         # without dedicated event detection this is the closest approximation.
-        if event.get("event_type") == "pass":
+        completed = event.get("event_type") == "pass"
+
+        sender_row.passes_total += 1
+        if is_short:
+            sender_row.passes_short += 1
+            sender_row.passes_short_completed += completed
+        else:
+            sender_row.passes_long += 1
+            sender_row.passes_long_completed += completed
+        if completed:
             sender_row.passes_completed += 1
+
+        pass_attempts.append(
+            {
+                "timestamp": timestamp,
+                "sender_track_id": sender.get("track_id"),
+                "recipient_track_id": recipient_track,
+                # pitch metres; for a lost pass the "end" is where the ball /
+                # the intercepting player was - a reliable point, unlike guessing
+                # the intended target.
+                "start_x": round(sx, 2),
+                "start_y": round(sy, 2),
+                "end_x": round(rx, 2),
+                "end_y": round(ry, 2),
+                "distance_m": round(distance, 2),
+                "length": "short" if is_short else "long",
+                "completed": completed,
+            }
+        )
 
     # --- 2) shots ------------------------------------------------------------
     for event in shot_events:
@@ -325,6 +373,7 @@ def compute_advanced_stats(
         run_start = run_end + 1
 
     result.player_rows = [rows[track_id].as_dict() for track_id in sorted(rows)]
+    result.pass_attempts = pass_attempts
     return result
 
 
@@ -333,6 +382,8 @@ _ADVANCED_STAT_FIELDS = (
     "passes_completed",
     "passes_short",
     "passes_long",
+    "passes_short_completed",
+    "passes_long_completed",
     "shots",
     "xg",
     "duels_total",
@@ -342,17 +393,11 @@ _ADVANCED_STAT_FIELDS = (
 )
 
 
-def compute_and_store_player_stats(match_id: int, db: Session) -> dict:
-    """Recompute duel/dribble events and per-identity advanced stats for a match.
-
-    Post-processing only: reads existing detections + Phase 4/5b/5d events, never
-    the video. Idempotent - previous ``duel``/``dribble`` events and
-    ``match_player_stats`` rows for the match are replaced.
-    """
+def _load_match_inputs(match_id: int, db: Session):
+    """Shared loader: (match, video, records, pass_events, shot_events, cluster_roles)."""
     match = db.get(Match, match_id)
     if match is None:
         raise ValueError("Match not found")
-
     video = db.scalar(select(Video).where(Video.match_id == match_id).order_by(Video.id))
     if video is None:
         raise ValueError("No video found")
@@ -369,11 +414,17 @@ def compute_and_store_player_stats(match_id: int, db: Session) -> dict:
             "timestamp": item.frame_timestamp,
             "box": item.bounding_box,
             "cluster": item.team_color_cluster,
+            "pitch": (item.pitch_x, item.pitch_y),
         }
         for item in detections
     ]
     pass_events = [
-        {"event_type": event.event_type, "timestamp": event.timestamp_seconds, "track_id": event.track_id}
+        {
+            "event_type": event.event_type,
+            "timestamp": event.timestamp_seconds,
+            "track_id": event.track_id,                    # recipient / new owner
+            "sender_track_id": event.related_track_id,      # pass origin (set by run_analysis)
+        }
         for event in db.scalars(
             select(Event).where(
                 Event.match_id == match_id,
@@ -388,6 +439,64 @@ def compute_and_store_player_stats(match_id: int, db: Session) -> dict:
         ).all()
     ]
     cluster_roles = {item.cluster_id: item.role for item in match.team_cluster_assignments}
+    return match, video, records, pass_events, shot_events, cluster_roles
+
+
+def read_player_passes(match_id: int, match_player_id: int, db: Session) -> dict:
+    """Every pass attempt (completed + lost) by one whole-match identity.
+
+    Recomputes from stored detections/events (fast, no video), then keeps only
+    attempts whose sender track belongs to the identity.
+    """
+    match, video, records, pass_events, shot_events, cluster_roles = _load_match_inputs(match_id, db)
+    identity = db.get(MatchPlayer, match_player_id)
+    if identity is None or identity.match_id != match_id:
+        raise ValueError("Player identity not found for this match")
+
+    identity_tracks = {
+        link.track_id
+        for link in db.scalars(
+            select(TrackPlayerLink).where(
+                TrackPlayerLink.match_id == match_id,
+                TrackPlayerLink.match_player_id == match_player_id,
+            )
+        ).all()
+    }
+    computed = compute_advanced_stats(
+        records, pass_events, shot_events, video.width or 1, video.height or 1, cluster_roles
+    )
+    passes = [
+        attempt for attempt in computed.pass_attempts if attempt["sender_track_id"] in identity_tracks
+    ]
+    role = cluster_roles.get(identity.team_color_cluster, "unknown")
+    return {
+        "match_id": match_id,
+        "match_player_id": match_player_id,
+        "label": _identity_label(role, identity),
+        "team_role": role,
+        "jersey_number": identity.jersey_number,
+        "passes": passes,
+        "total": len(passes),
+        "completed": sum(1 for p in passes if p["completed"]),
+        "failed": sum(1 for p in passes if not p["completed"]),
+        "short": sum(1 for p in passes if p["length"] == "short"),
+        "long": sum(1 for p in passes if p["length"] == "long"),
+        "note": (
+            "Pass map from possession-change events. 'Lost' passes end where the "
+            "ball / the intercepting player was, not at the intended target, and a "
+            "turnover may really have been a tackle rather than a bad pass."
+        ),
+    }
+
+
+def compute_and_store_player_stats(match_id: int, db: Session) -> dict:
+    """Recompute duel/dribble events and per-identity advanced stats for a match.
+
+    Post-processing only: reads existing detections + Phase 4/5b/5d events, never
+    the video. Idempotent - previous ``duel``/``dribble`` events and
+    ``match_player_stats`` rows for the match are replaced.
+    """
+    match, video, records, pass_events, shot_events, cluster_roles = _load_match_inputs(match_id, db)
 
     computed = compute_advanced_stats(
         records, pass_events, shot_events, video.width or 1, video.height or 1, cluster_roles
@@ -453,6 +562,8 @@ def compute_and_store_player_stats(match_id: int, db: Session) -> dict:
                 passes_completed=bucket["passes_completed"],
                 passes_short=bucket["passes_short"],
                 passes_long=bucket["passes_long"],
+                passes_short_completed=bucket["passes_short_completed"],
+                passes_long_completed=bucket["passes_long_completed"],
                 shots=bucket["shots"],
                 xg=round(bucket["xg"], 4),
                 duels_total=bucket["duels_total"],
@@ -543,6 +654,8 @@ def read_player_stats(db: Session, match_id: int) -> dict:
                 "passes_completed": stat.passes_completed if stat else 0,
                 "passes_short": stat.passes_short if stat else 0,
                 "passes_long": stat.passes_long if stat else 0,
+                "passes_short_completed": stat.passes_short_completed if stat else 0,
+                "passes_long_completed": stat.passes_long_completed if stat else 0,
                 "shots": stat.shots if stat else 0,
                 "xg": round(stat.xg, 4) if stat else 0.0,
                 "duels_total": stat.duels_total if stat else 0,

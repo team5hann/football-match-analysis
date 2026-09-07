@@ -29,7 +29,10 @@ from app.services.player_options import build_player_options
 from app.schemas.player_identity import PlayerIdentitiesRead
 from app.services.player_identity import link_map, merge_player_identities, read_player_identities
 from app.schemas.player_stats import PlayerStatsRead, PlayerStatsRunRead
-from app.services.player_stats import compute_and_store_player_stats, read_player_stats
+from app.services.player_stats import compute_and_store_player_stats, read_player_passes, read_player_stats
+from app.schemas.player_passes import PlayerPassesRead
+from app.schemas.radar import MatchRadarRead
+from app.services.radar import compute_team_radar
 from app.services.report import build_report_data, render_csv, render_pdf, render_xlsx
 
 router = APIRouter(prefix="/api/matches", tags=["matches"])
@@ -323,6 +326,31 @@ def get_player_stats(match_id: int, db: Session = Depends(get_db)) -> PlayerStat
     return PlayerStatsRead(**read_player_stats(db, match_id))
 
 
+@router.get("/{match_id}/radar", response_model=MatchRadarRead)
+def get_match_radar(match_id: int, db: Session = Depends(get_db)) -> MatchRadarRead:
+    """Five 0-10 team performance axes for home and away.
+
+    Attack/Passing/Defence come from stored stats; Pressing and Transitions are
+    rough approximations (see the ``notes`` field) - not PPDA or a real
+    transition model. Recomputed on demand, no video work.
+    """
+    try:
+        return MatchRadarRead(**compute_team_radar(match_id, db))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/{match_id}/player-passes/{match_player_id}", response_model=PlayerPassesRead)
+def get_player_passes(match_id: int, match_player_id: int, db: Session = Depends(get_db)) -> PlayerPassesRead:
+    """All pass attempts (completed + lost) for one merged player identity, as
+    start/end pitch positions for a pass map. Recomputed on demand from stored
+    detections/events - a few seconds on a full match, no video work."""
+    try:
+        return PlayerPassesRead(**read_player_passes(match_id, match_player_id, db))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.get("/{match_id}/passing-network", response_model=PassingNetworkRead)
 def get_passing_network(match_id: int, db: Session = Depends(get_db)) -> PassingNetworkRead:
     match = db.get(Match, match_id)
@@ -342,7 +370,11 @@ def get_passing_network(match_id: int, db: Session = Depends(get_db)) -> Passing
         {"class": item.class_name, "track_id": item.track_id, "timestamp": item.frame_timestamp, "box": item.bounding_box, "cluster": item.team_color_cluster, "jersey_number": item.jersey_number, "pitch": (item.pitch_x, item.pitch_y)}
         for item in detections
     ]
-    event_records = [{"track_id": event.track_id, "timestamp": event.timestamp_seconds} for event in events]
+    # sender_track_id comes from the debounced analysis (Event.related_track_id).
+    event_records = [
+        {"track_id": event.track_id, "sender_track_id": event.related_track_id, "timestamp": event.timestamp_seconds}
+        for event in events
+    ]
     result = build_passing_network(
         records, event_records, video.width or 1, video.height or 1, cluster_roles, link_map(db, match_id)
     )
@@ -510,10 +542,11 @@ def export_match_report(match_id: int, format: str = Query("pdf", pattern="^(pdf
         event_records = db.scalars(select(Event).where(Event.match_id == match_id, Event.event_type == "pass").order_by(Event.timestamp_seconds, Event.id)).all()
         network = build_passing_network(
             records,
-            [{"track_id": event.track_id, "timestamp": event.timestamp_seconds} for event in event_records],
+            [{"track_id": event.track_id, "sender_track_id": event.related_track_id, "timestamp": event.timestamp_seconds} for event in event_records],
             video.width or 1,
             video.height or 1,
             cluster_roles,
+            link_map(db, match_id),
         )
     summary = db.scalar(select(MatchAnalysisSummary).where(MatchAnalysisSummary.match_id == match_id))
     metrics = db.scalars(select(PlayerMetric).where(PlayerMetric.match_id == match_id).order_by(PlayerMetric.track_id)).all()

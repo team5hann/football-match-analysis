@@ -19,6 +19,8 @@ class MatchPlayerStatRead(BaseModel):
     passes_completed: int
     passes_short: int
     passes_long: int
+    passes_short_completed: int
+    passes_long_completed: int
 
     # shots
     shots: int

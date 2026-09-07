@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models.team import Team
 from app.schemas.team import TeamCreate, TeamRead, TeamUpdate
+from app.schemas.team_stats import TeamStatsRead
+from app.services.team_stats import aggregate_team_stats
 
 router = APIRouter(prefix="/api/teams", tags=["teams"])
 
@@ -29,6 +31,19 @@ def get_team(team_id: int, db: Session = Depends(get_db)) -> Team:
     if team is None:
         raise HTTPException(status_code=404, detail="Team not found")
     return team
+
+
+@router.get("/{team_id}/stats", response_model=TeamStatsRead)
+def get_team_stats(team_id: int, db: Session = Depends(get_db)) -> TeamStatsRead:
+    """Aggregate a team's numbers across every match it played (home or away).
+
+    Reads stored analysis/player-stats only; it does not run anything. Matches
+    without analysis still appear in the trend list with null possession/xG.
+    """
+    try:
+        return TeamStatsRead(**aggregate_team_stats(db, team_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.put("/{team_id}", response_model=TeamRead)

@@ -54,6 +54,65 @@ def test_passes_split_into_short_long_and_possession_loss_is_a_failed_pass():
     for row in result.player_rows:
         assert row["passes_completed"] <= row["passes_total"]
         assert row["passes_short"] + row["passes_long"] == row["passes_total"]
+        # short/long completed split (Part 4): each never exceeds its bucket and
+        # together they equal the overall completed count.
+        assert row["passes_short_completed"] <= row["passes_short"]
+        assert row["passes_long_completed"] <= row["passes_long"]
+        assert row["passes_short_completed"] + row["passes_long_completed"] == row["passes_completed"]
+
+    # track 1's single long pass was completed -> long_completed == 1
+    assert by_track[1]["passes_long_completed"] == 1
+    assert by_track[1]["passes_short_completed"] == 0
+
+
+def test_pass_attempts_carry_positions_and_outcome_for_the_pass_map():
+    records = [
+        _player(1, 0, 0.0, 20, 34), _ball(0.0, 20, 34), _player(2, 0, 0.0, 60, 34), _player(3, 1, 0.0, 90, 10),
+        _player(1, 0, 1.0, 20, 34), _ball(1.0, 60, 34), _player(2, 0, 1.0, 60, 34), _player(3, 1, 1.0, 90, 10),
+        _player(1, 0, 2.0, 20, 34), _ball(2.0, 90, 12), _player(2, 0, 2.0, 60, 34), _player(3, 1, 2.0, 90, 12),
+    ]
+    pass_events = [
+        {"event_type": "pass", "timestamp": 1.0, "track_id": 2},
+        {"event_type": "possession_loss", "timestamp": 2.0, "track_id": 3},
+    ]
+
+    attempts = compute_advanced_stats(records, pass_events, [], 100, 100, ROLES).pass_attempts
+    assert len(attempts) == 2
+
+    completed = next(a for a in attempts if a["completed"])
+    lost = next(a for a in attempts if not a["completed"])
+
+    # completed pass: sender track 1 near (21, 35.7) -> recipient track 2 near (63, 35.7)
+    assert completed["sender_track_id"] == 1 and completed["recipient_track_id"] == 2
+    assert completed["start_x"] < completed["end_x"]                 # ball moved downfield
+    assert abs(completed["start_y"] - completed["end_y"]) < 5
+    assert completed["distance_m"] > 0 and completed["length"] in ("short", "long")
+
+    # lost pass: sender is the last owner (track 2), end is where the ball / the
+    # winning opponent (track 3) was - not a guessed target.
+    assert lost["sender_track_id"] == 2
+    assert lost["completed"] is False
+
+
+def test_short_and_long_completed_split_with_zero_attempt_edge_case():
+    # track 1 completes a short pass to track 2, then track 2 completes a long
+    # pass to track 3 (all same team); nobody loses the ball.
+    records = [
+        _player(1, 0, 0.0, 20, 34), _ball(0.0, 20, 34), _player(2, 0, 0.0, 28, 34), _player(3, 0, 0.0, 80, 34),
+        _player(1, 0, 1.0, 20, 34), _ball(1.0, 28, 34), _player(2, 0, 1.0, 28, 34), _player(3, 0, 1.0, 80, 34),
+        _player(1, 0, 2.0, 20, 34), _ball(2.0, 80, 34), _player(2, 0, 2.0, 28, 34), _player(3, 0, 2.0, 80, 34),
+    ]
+    events = [
+        {"event_type": "pass", "timestamp": 1.0, "track_id": 2},   # ~8 m -> short, completed
+        {"event_type": "pass", "timestamp": 2.0, "track_id": 3},   # ~52 m -> long, completed
+    ]
+    rows = {r["track_id"]: r for r in compute_advanced_stats(records, events, [], 100, 100, ROLES).player_rows}
+
+    assert rows[1]["passes_short"] == 1 and rows[1]["passes_short_completed"] == 1
+    assert rows[1]["passes_long"] == 0 and rows[1]["passes_long_completed"] == 0
+    assert rows[2]["passes_long"] == 1 and rows[2]["passes_long_completed"] == 1
+    # track 3 never passed -> every bucket is zero, no division happens here
+    assert 3 not in rows or (rows[3]["passes_total"] == 0 and rows[3]["passes_short_completed"] == 0)
 
 
 def test_shots_aggregate_count_and_xg_per_player():

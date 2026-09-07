@@ -1,6 +1,8 @@
+import gc
 import math
 import subprocess
 import tempfile
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -24,6 +26,13 @@ PERSON_CLASS_ID = 0
 BALL_MODEL_PATH = Path(__file__).resolve().parents[2] / "models" / "football-ball-detection.pt"
 BALL_CLASS_ID = 0
 
+# Player track_id now comes straight from Ultralytics' built-in ByteTrack
+# (model.track(..., tracker=TRACKER_CONFIG)) instead of the old per-frame IoU
+# matching in analysis.py. ByteTrack keeps a Kalman motion model per track and
+# recovers it across short detection gaps, so one real player stays one track_id
+# far more often - which in turn feeds cleaner identity merging downstream.
+TRACKER_CONFIG = "bytetrack.yaml"
+
 # Number of frames sent to YOLO in a single inference call. Batching keeps the
 # GPU busy between frames and is the main speed-up over one-frame-at-a-time.
 # The dev GPU (T500) has only 4 GB VRAM and one 1080p frame already needs
@@ -32,6 +41,14 @@ BALL_CLASS_ID = 0
 # (8 -> 4 -> 2 -> 1) and retries, so lower this only to skip the first failed
 # attempts, or raise it when running on a GPU with more headroom.
 DETECTION_BATCH_SIZE = 8
+
+# Detections are streamed to the database in chunks instead of being held in the
+# ORM session until one final commit. A 110s clip sampled at ~30fps is ~3300
+# frames * ~13 boxes ~= 43k rows; keeping all of those as pending ORM instances
+# (plus the identity map and the single giant flush) is what pushed a longer
+# video into a host-RAM OOM. Flushing every few thousand rows caps the session's
+# footprint to roughly this many Detection mappings at a time.
+DETECTION_FLUSH_ROWS = 3000
 
 
 @lru_cache(maxsize=1)
@@ -72,6 +89,34 @@ def _empty_cuda_cache(device: str) -> None:
         pass
 
 
+def _release_predictor_gpu(model, device: str) -> None:
+    """Drop a YOLO model's inference predictor and free its CUDA allocations.
+
+    ``model.track(stream=True)`` builds a persistent ``model.predictor`` that
+    holds the tracking model's weights + activation buffers on the GPU for the
+    whole run. On a 4 GB card that is almost the entire device, so the *next*
+    model to run (the separate ball model) has no room to allocate and the
+    driver call wedges instead of raising a clean CUDA OOM. Tearing the
+    predictor down between phases returns that memory.
+    """
+    try:
+        predictor = getattr(model, "predictor", None)
+        if predictor is not None:
+            for attr in ("model", "trackers"):
+                if hasattr(predictor, attr):
+                    setattr(predictor, attr, None)
+        model.predictor = None
+    except Exception:  # best effort - the empty_cache below still helps
+        pass
+    try:
+        import gc
+
+        gc.collect()
+    except Exception:
+        pass
+    _empty_cuda_cache(device)
+
+
 def extract_frames(video_path: str, output_dir: Path, interval_seconds: float | None = None) -> list[Path]:
     if interval_seconds is None:
         interval_seconds = settings.detection_sample_interval_seconds
@@ -108,6 +153,8 @@ def run_detection(video_id: int, model=None, ball_model=None, session_factory=Se
         db.close()
         return
 
+    file_path = video.file_path
+
     try:
         video.status = VideoStatus.PROCESSING
         video.match.status = MatchStatus.PROCESSING
@@ -138,49 +185,112 @@ def run_detection(video_id: int, model=None, ball_model=None, session_factory=Se
 
         with tempfile.TemporaryDirectory(prefix="football-frames-") as temp_dir:
             sample_interval = settings.detection_sample_interval_seconds
-            frames = extract_frames(video.file_path, Path(temp_dir), sample_interval)
+            frames = extract_frames(file_path, Path(temp_dir), sample_interval)
+            frame_paths = [str(path) for path in frames]
 
-            batch_size = DETECTION_BATCH_SIZE
-            base = 0
-            while base < len(frames):
-                batch_paths = [str(path) for path in frames[base : base + batch_size]]
-                try:
-                    player_results = model(batch_paths, device=device, half=player_half, verbose=False)
-                    ball_results = (
-                        ball_model(batch_paths, device=device, half=ball_half, verbose=False)
-                        if ball_model is not None
-                        else None
-                    )
-                except Exception as exc:  # noqa: BLE001 - narrow to CUDA OOM below
-                    if _is_cuda_oom(exc) and batch_size > 1:
-                        batch_size = max(1, batch_size // 2)
-                        _empty_cuda_cache(device)
-                        print(f"[detection] CUDA out of memory, retrying with batch size {batch_size}", flush=True)
-                        continue
-                    raise
+            # Detections are accumulated here and flushed to the DB in bounded
+            # chunks (see DETECTION_FLUSH_ROWS) so a long video never holds the
+            # whole result set in memory at once.
+            pending: list[dict] = []
 
-                # Ultralytics preserves input order, so result i belongs to
-                # frame `base + i`; keep the original per-frame timestamp mapping.
-                for offset, result in enumerate(player_results):
-                    _store_detections(
-                        db, video_id, base + offset, sample_interval, [result], PERSON_CLASS_ID, "player"
+            def flush(force: bool = False) -> None:
+                if pending and (force or len(pending) >= DETECTION_FLUSH_ROWS):
+                    db.bulk_insert_mappings(Detection, pending)
+                    db.commit()
+                    pending.clear()
+                    # YOLO Results hold the full frame image and sit in reference
+                    # cycles, so they are only reclaimed by the cyclic GC; force
+                    # it here so they cannot pile up across a long video.
+                    gc.collect()
+
+            # --- players: ByteTrack over the ordered sampled frames --------------
+            # Tracking is inherently sequential, so we lose the GPU batching the
+            # ball model still uses; the continuity win is worth it.
+            frame_total = len(frame_paths)
+            print(
+                f"[detection] player tracking with {TRACKER_CONFIG} over {frame_total} frames",
+                flush=True,
+            )
+            # Pass the frames *directory*, never a Python list: Ultralytics treats
+            # a list as a batch of in-memory images and eagerly decodes every one
+            # (3300 * 1080p ~= 20 GB -> host OOM), whereas a directory streams one
+            # frame at a time. persist=True keeps the ByteTrack state across the
+            # whole sequence - with the default persist=False Ultralytics sees a
+            # new filename each frame, assumes a new video, and resets the tracker
+            # every frame, so track_ids would never carry across frames.
+            player_stream = model.track(
+                source=temp_dir,
+                stream=True,
+                persist=True,
+                tracker=TRACKER_CONFIG,
+                classes=[PERSON_CLASS_ID],
+                device=device,
+                half=player_half,
+                verbose=False,
+            )
+            track_started = time.perf_counter()
+            for frame_number, result in enumerate(player_stream):
+                pending.extend(
+                    _result_rows(video_id, frame_number, sample_interval, result, PERSON_CLASS_ID, "player")
+                )
+                # Drop the yielded Results object (it still holds the full frame
+                # image) before pulling the next one.
+                del result
+                flush()
+                # Tracking is sequential and can run for minutes on a modest GPU;
+                # log periodic progress so a long run is observable.
+                if (frame_number + 1) % 100 == 0 or frame_number + 1 == frame_total:
+                    elapsed = time.perf_counter() - track_started
+                    rate = (frame_number + 1) / elapsed if elapsed else 0.0
+                    print(
+                        f"[detection] tracked {frame_number + 1}/{frame_total} frames "
+                        f"({elapsed:.0f}s, {rate:.1f} fps)",
+                        flush=True,
                     )
-                if ball_results is not None:
+                    gc.collect()
+            flush(force=True)
+
+            # ByteTrack's persistent predictor still owns most of the GPU here;
+            # hand that memory back before the separate ball model runs.
+            del player_stream
+            _release_predictor_gpu(model, device)
+
+            # --- ball: plain batched detection --------------------------------
+            if ball_model is not None:
+                batch_size = DETECTION_BATCH_SIZE
+                base = 0
+                while base < len(frame_paths):
+                    batch_paths = frame_paths[base : base + batch_size]
+                    try:
+                        ball_results = ball_model(batch_paths, device=device, half=ball_half, verbose=False)
+                    except Exception as exc:  # noqa: BLE001 - narrow to CUDA OOM below
+                        if _is_cuda_oom(exc) and batch_size > 1:
+                            batch_size = max(1, batch_size // 2)
+                            _empty_cuda_cache(device)
+                            print(f"[detection] CUDA out of memory, retrying with batch size {batch_size}", flush=True)
+                            continue
+                        raise
                     for offset, result in enumerate(ball_results):
-                        _store_detections(
-                            db, video_id, base + offset, sample_interval, [result], BALL_CLASS_ID, "ball"
+                        pending.extend(
+                            _result_rows(video_id, base + offset, sample_interval, result, BALL_CLASS_ID, "ball")
                         )
-                base += len(batch_paths)
+                    base += len(batch_paths)
+                    del ball_results
+                    flush()
+                flush(force=True)
 
-            video.status = VideoStatus.ANALYZED
-            video.match.status = MatchStatus.ANALYZED
-            db.commit()
+        video = db.get(Video, video_id)
+        video.status = VideoStatus.ANALYZED
+        video.match.status = MatchStatus.ANALYZED
+        db.commit()
     except Exception as exc:
         db.rollback()
-        video.status = VideoStatus.FAILED
-        video.error_message = f"Detection failed: {exc}"
-        video.match.status = MatchStatus.FAILED
-        db.commit()
+        video = db.get(Video, video_id)
+        if video is not None:
+            video.status = VideoStatus.FAILED
+            video.error_message = f"Detection failed: {exc}"
+            video.match.status = MatchStatus.FAILED
+            db.commit()
     finally:
         db.close()
 
@@ -207,45 +317,53 @@ def reset_detection_data(video_id: int, db: Session) -> Video:
     return video
 
 
-def _store_detections(
-    db: Session,
+def _result_rows(
     video_id: int,
     frame_number: int,
     sample_interval: float,
-    results,
+    result,
     target_class_id: int,
     class_name: str,
-) -> None:
-    for result in results:
-        if result.boxes is None:
+) -> list[dict]:
+    """Turn one frame's boxes into ``Detection`` mapping dicts for a bulk insert.
+
+    Plain dicts (not ORM instances) keep the streaming insert path cheap: they
+    never enter the session's identity map, so memory stays flat over a long
+    video. ``result.boxes.id`` (present in track mode) becomes ``track_id``.
+    """
+    boxes = getattr(result, "boxes", None)
+    if boxes is None:
+        return []
+    xyxy = boxes.xyxy.tolist()
+    conf = boxes.conf.tolist()
+    cls = boxes.cls.tolist()
+    ids = boxes.id.tolist() if getattr(boxes, "id", None) is not None else [None] * len(xyxy)
+    frame_timestamp = round(frame_number * sample_interval, 6)
+    rows: list[dict] = []
+    for box, confidence, class_id, track_id in zip(xyxy, conf, cls, ids):
+        if int(class_id) != target_class_id:
             continue
-        for box, confidence, class_id in zip(
-            result.boxes.xyxy.tolist(),
-            result.boxes.conf.tolist(),
-            result.boxes.cls.tolist(),
-        ):
-            if int(class_id) != target_class_id:
-                continue
-            x_min, y_min, x_max, y_max = box
-            # FP16 inference can occasionally emit non-finite coordinates or
-            # scores; such boxes are meaningless and would break the JSON /
-            # float columns, so drop them instead of failing the whole run.
-            if not all(math.isfinite(value) for value in (x_min, y_min, x_max, y_max, confidence)):
-                continue
-            db.add(
-                Detection(
-                    video_id=video_id,
-                    frame_timestamp=round(frame_number * sample_interval, 6),
-                    bounding_box={
-                        "x": round(x_min, 3),
-                        "y": round(y_min, 3),
-                        "width": round(x_max - x_min, 3),
-                        "height": round(y_max - y_min, 3),
-                    },
-                    class_name=class_name,
-                    confidence=round(float(confidence), 4),
-                )
-            )
+        x_min, y_min, x_max, y_max = box
+        # FP16 inference can occasionally emit non-finite coordinates or scores;
+        # such boxes are meaningless and would break the JSON / float columns.
+        if not all(math.isfinite(value) for value in (x_min, y_min, x_max, y_max, confidence)):
+            continue
+        rows.append(
+            {
+                "video_id": video_id,
+                "frame_timestamp": frame_timestamp,
+                "bounding_box": {
+                    "x": round(x_min, 3),
+                    "y": round(y_min, 3),
+                    "width": round(x_max - x_min, 3),
+                    "height": round(y_max - y_min, 3),
+                },
+                "class_name": class_name,
+                "confidence": round(float(confidence), 4),
+                "track_id": int(track_id) if track_id is not None and math.isfinite(track_id) else None,
+            }
+        )
+    return rows
 
 
 def list_detections(video_id: int, db: Session) -> list[Detection]:

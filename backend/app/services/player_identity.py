@@ -27,11 +27,17 @@ from app.models.match import Match
 from app.models.player_identity import MatchPlayer, TrackPlayerLink
 from app.models.video import Video
 
-# A jersey number is only trusted for stitching two tracks together once at
-# least one OCR read of it on a track cleared this confidence. Below it the
-# number is treated as unknown, so the track stays a separate identity rather
-# than risk merging two different players.
+# A jersey number is only trusted for stitching two tracks together once OCR
+# read it, above this confidence, enough times AND with that number clearly
+# dominating the *other* numbers OCR produced for the same track. The share is
+# taken over the track's confident reads, not its frames: an earlier
+# frame-fraction rule assumed short IoU tracker fragments, but ByteTrack tracks
+# span the whole clip, so `0.15 * frames` became hundreds of reads and no track
+# could ever clear it. OCR on this footage is heavily biased toward a few
+# numbers, so a scattered 3-4 reads is still treated as noise.
 JERSEY_CONFIDENCE_THRESHOLD = 0.5
+JERSEY_MIN_READ_SHARE = 0.6
+JERSEY_MIN_READ_COUNT = 5
 
 
 class TrackIdentity:
@@ -60,6 +66,8 @@ def _mode(values) -> int | None:
 def summarise_track(
     detections: list[dict],
     jersey_confidence_threshold: float = JERSEY_CONFIDENCE_THRESHOLD,
+    min_read_count: int = JERSEY_MIN_READ_COUNT,
+    min_read_share: float = JERSEY_MIN_READ_SHARE,
 ) -> tuple[int | None, int | None, float]:
     """Reduce one track's detections to (cluster, confident number, confidence).
 
@@ -84,43 +92,83 @@ def summarise_track(
         for detection in confident_reads
         if detection["jersey_number"] == number
     ]
+    # Trust the number only if OCR read it enough times AND it clearly dominates
+    # the other numbers OCR produced for this track - a scattered vote across
+    # several numbers is misread noise, not a legible jersey.
+    if len(scores) < min_read_count:
+        return cluster, None, 0.0
+    if len(scores) / len(confident_reads) < min_read_share:
+        return cluster, None, 0.0
     return cluster, number, round(sum(scores) / len(scores), 4)
 
 
 def group_tracks_into_identities(
     track_detections: dict[int, list[dict]],
     jersey_confidence_threshold: float = JERSEY_CONFIDENCE_THRESHOLD,
+    min_read_count: int = JERSEY_MIN_READ_COUNT,
+    min_read_share: float = JERSEY_MIN_READ_SHARE,
+    track_frames: dict[int, set[float]] | None = None,
 ) -> list[TrackIdentity]:
     """Heuristically group tracks that share cluster + confident jersey number.
 
     Tracks that lack a team colour cluster or a confident jersey number are
     returned as standalone ``is_unknown`` identities (one per track) - they
     cannot be merged safely without real re-identification.
+
+    When ``track_frames`` (``{track_id: set of frame timestamps}``) is given,
+    two tracks that carry the same (cluster, number) but are on the pitch at the
+    same time are treated as an OCR collision: at most one can really be that
+    player and we cannot tell which, so every track in that group is demoted to
+    ``is_unknown``. This guard matters for ByteTrack output, where tracks are
+    long and genuinely concurrent (unlike the short IoU fragments this module
+    was first written for, which rarely overlapped).
     """
     summaries = {
-        track_id: summarise_track(detections, jersey_confidence_threshold)
+        track_id: summarise_track(detections, jersey_confidence_threshold, min_read_count, min_read_share)
         for track_id, detections in track_detections.items()
     }
 
-    merged: dict[tuple[int, int], tuple[TrackIdentity, list[float]]] = {}
-    identities: list[TrackIdentity] = []
+    candidates: dict[tuple[int, int], list[int]] = defaultdict(list)
+    unknown_track_ids: list[int] = []
     for track_id in sorted(track_detections):
-        cluster, number, confidence = summaries[track_id]
+        cluster, number, _confidence = summaries[track_id]
         if cluster is not None and number is not None:
-            key = (cluster, number)
-            if key not in merged:
-                identity = TrackIdentity([track_id], cluster, number, confidence, is_unknown=False)
-                merged[key] = (identity, [confidence])
-                identities.append(identity)
-            else:
-                identity, confidences = merged[key]
-                identity.track_ids.append(track_id)
-                confidences.append(confidence)
-                identity.confidence = round(sum(confidences) / len(confidences), 4)
+            candidates[(cluster, number)].append(track_id)
         else:
-            identities.append(
-                TrackIdentity([track_id], cluster, number, confidence, is_unknown=True)
+            unknown_track_ids.append(track_id)
+
+    def _tracks_overlap(track_ids: list[int]) -> bool:
+        if track_frames is None:
+            return False
+        seen: set[float] = set()
+        for track_id in track_ids:
+            frames = track_frames.get(track_id) or set()
+            if seen & frames:
+                return True
+            seen |= frames
+        return False
+
+    identities: list[TrackIdentity] = []
+    for (cluster, number), track_ids in candidates.items():
+        if len(track_ids) > 1 and _tracks_overlap(track_ids):
+            for track_id in track_ids:
+                identities.append(TrackIdentity([track_id], cluster, None, 0.0, is_unknown=True))
+            continue
+        confidences = [summaries[track_id][2] for track_id in track_ids]
+        identities.append(
+            TrackIdentity(
+                sorted(track_ids),
+                cluster,
+                number,
+                round(sum(confidences) / len(confidences), 4),
+                is_unknown=False,
             )
+        )
+
+    for track_id in unknown_track_ids:
+        cluster, number, confidence = summaries[track_id]
+        identities.append(TrackIdentity([track_id], cluster, number, confidence, is_unknown=True))
+
     return identities
 
 
@@ -193,6 +241,7 @@ def merge_player_identities(
         )
 
         by_track: dict[int, list[dict]] = defaultdict(list)
+        track_frames: dict[int, set[float]] = defaultdict(set)
         for detection in detections:
             by_track[detection.track_id].append(
                 {
@@ -201,8 +250,9 @@ def merge_player_identities(
                     "jersey_number_confidence": detection.jersey_number_confidence,
                 }
             )
+            track_frames[detection.track_id].add(detection.frame_timestamp)
 
-        identities = group_tracks_into_identities(by_track)
+        identities = group_tracks_into_identities(by_track, track_frames=track_frames)
 
         db.execute(delete(TrackPlayerLink).where(TrackPlayerLink.match_id == match_id))
         db.execute(delete(MatchPlayer).where(MatchPlayer.match_id == match_id))

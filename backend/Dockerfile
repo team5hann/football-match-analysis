@@ -11,6 +11,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# ByteTrack (used by Ultralytics model.track) needs the linear-assignment solver.
+# Kept as its own layer so it doesn't bust the big requirements/torch cache.
+RUN pip install --no-cache-dir lap==0.5.13
+
 COPY . .
 
 RUN mkdir -p /app/models && \

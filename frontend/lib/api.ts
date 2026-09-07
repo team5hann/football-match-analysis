@@ -75,6 +75,8 @@ export interface MatchPlayerStat {
   passes_completed: number;
   passes_short: number;
   passes_long: number;
+  passes_short_completed: number;
+  passes_long_completed: number;
   shots: number;
   xg: number;
   duels_total: number;
@@ -173,6 +175,55 @@ export interface TacticalAnalysis {
   coordinate_note: string;
 }
 
+export interface PassAttempt {
+  timestamp: number;
+  sender_track_id: number | null;
+  recipient_track_id: number | null;
+  start_x: number;
+  start_y: number;
+  end_x: number;
+  end_y: number;
+  distance_m: number;
+  length: "short" | "long";
+  completed: boolean;
+}
+
+export interface PlayerPasses {
+  match_id: number;
+  match_player_id: number;
+  label: string;
+  team_role: string;
+  jersey_number: number | null;
+  passes: PassAttempt[];
+  total: number;
+  completed: number;
+  failed: number;
+  short: number;
+  long: number;
+  note: string;
+}
+
+export interface RadarScores {
+  attack: number;
+  passing: number;
+  defence: number;
+  pressing: number;
+  transitions: number;
+}
+
+export interface TeamRadar {
+  team_role: "home" | "away";
+  scores: RadarScores;
+  detail: Record<string, number>;
+}
+
+export interface MatchRadar {
+  match_id: number;
+  home: TeamRadar;
+  away: TeamRadar;
+  notes: Record<string, string>;
+}
+
 export interface Shot {
   id: number;
   timestamp_seconds: number;
@@ -243,6 +294,63 @@ export interface MatchDetail extends Match {
   videos: Video[];
 }
 
+export interface TeamMatchTrendRow {
+  match_id: number;
+  match_date: string | null;
+  opponent_team_id: number | null;
+  opponent_name: string | null;
+  side: "home" | "away";
+  status: string;
+  possession_pct: number | null;
+  xg: number;
+  shots: number;
+  result: "win" | "draw" | "loss" | null;
+  goals_for: number | null;
+  goals_against: number | null;
+}
+
+export interface TeamPlayerAggregate {
+  jersey_number: number;
+  matches_played: number;
+  touches: number;
+  touches_per_match: number;
+  distance_meters: number;
+  max_speed_mps: number;
+  passes_total: number;
+  passes_completed: number;
+  passes_short: number;
+  passes_long: number;
+  passes_short_completed: number;
+  passes_long_completed: number;
+  shots: number;
+  xg: number;
+  duels_total: number;
+  duels_won: number;
+  dribbles_total: number;
+  dribbles_completed: number;
+}
+
+export interface TeamStats {
+  team_id: number;
+  team_name: string;
+  matches_played: number;
+  matches_with_analysis: number;
+  avg_possession_pct: number | null;
+  total_xg: number;
+  avg_xg: number;
+  total_shots: number;
+  results_recorded: number;
+  wins: number;
+  draws: number;
+  losses: number;
+  goals_for: number;
+  goals_against: number;
+  trend: TeamMatchTrendRow[];
+  players: TeamPlayerAggregate[];
+  players_without_jersey_number: number;
+  player_identity_note: string;
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -289,6 +397,8 @@ export const api = {
   listTeams: () => request<Team[]>("/api/teams"),
   createTeam: (data: { name: string; short_name?: string; country?: string }) =>
     request<Team>("/api/teams", { method: "POST", body: JSON.stringify(data) }),
+  getTeam: (id: number) => request<Team>(`/api/teams/${id}`),
+  getTeamStats: (id: number) => request<TeamStats>(`/api/teams/${id}/stats`),
 
   listMatches: () => request<Match[]>("/api/matches"),
   getMatch: (id: number) => request<MatchDetail>(`/api/matches/${id}`),
@@ -329,6 +439,9 @@ export const api = {
   startPlayerStats: (matchId: number) =>
     request<PlayerStatsRun>(`/api/matches/${matchId}/player-stats`, { method: "POST" }),
   getPlayerStats: (matchId: number) => request<PlayerStats>(`/api/matches/${matchId}/player-stats`),
+  getPlayerPasses: (matchId: number, matchPlayerId: number) =>
+    request<PlayerPasses>(`/api/matches/${matchId}/player-passes/${matchPlayerId}`),
+  getRadar: (matchId: number) => request<MatchRadar>(`/api/matches/${matchId}/radar`),
   getHeatmap: (matchId: number, params: { mode: "team" | "player"; track_id?: number; team_color_cluster?: number }) => {
     const query = new URLSearchParams({ mode: params.mode });
     if (params.track_id !== undefined) query.set("track_id", String(params.track_id));

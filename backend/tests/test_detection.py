@@ -37,6 +37,8 @@ def test_detection_stores_player_detections(client, tmp_path):
     assert body["detections"][0]["class"] == "player"
     assert body["detections"][0]["bounding_box"] == {"x": 10.0, "y": 20.0, "width": 50.0, "height": 80.0}
     assert body["detections"][1]["frame_timestamp"] == 0.033
+    # track_id now comes straight from the (fake) ByteTrack stream
+    assert body["detections"][0]["track_id"] == 1
 
 
 def test_detection_stores_specialized_ball_detections(client, tmp_path):
@@ -67,29 +69,44 @@ class FakeTensor:
         return self.values
 
 
+def _fake_result(box, track_id=None):
+    xyxy, conf, cls = box
+    return SimpleNamespace(
+        boxes=SimpleNamespace(
+            xyxy=FakeTensor([xyxy]),
+            conf=FakeTensor([conf]),
+            cls=FakeTensor([cls]),
+            id=FakeTensor([track_id]) if track_id is not None else None,
+        )
+    )
+
+
 class FakeYoloModel:
+    """Stands in for a tracking YOLO model: .track() yields one result per frame
+    with a stable ByteTrack-style id."""
+
     box = ([10, 20, 60, 100], 0.91, 0)
 
     def to(self, device: str):
         return self
 
-    def __call__(self, source, verbose: bool = False, **kwargs):
-        # run_detection now passes a batch (list of paths); tolerate a single path too.
-        paths = source if isinstance(source, list) else [source]
-        results = []
+    def track(self, source, stream=False, persist=False, **kwargs):
+        # Real code now hands Ultralytics the frames *directory* (never a list),
+        # so mirror that: expand a directory to its sorted .jpg frames.
+        if isinstance(source, list):
+            paths = source
+        elif Path(source).is_dir():
+            paths = sorted(Path(source).glob("*.jpg"))
+        else:
+            paths = [source]
+        assert paths, f"no frames found for source {source!r}"
         for frame_path in paths:
             assert Path(frame_path).suffix == ".jpg"
-            xyxy, conf, cls = self.box
-            results.append(
-                SimpleNamespace(
-                    boxes=SimpleNamespace(
-                        xyxy=FakeTensor([xyxy]),
-                        conf=FakeTensor([conf]),
-                        cls=FakeTensor([cls]),
-                    )
-                )
-            )
-        return results
+            yield _fake_result(self.box, track_id=1)
+
+    def __call__(self, source, verbose: bool = False, **kwargs):
+        paths = source if isinstance(source, list) else [source]
+        return [_fake_result(self.box) for frame_path in paths if Path(frame_path).suffix == ".jpg"]
 
 
 class FakeBallYoloModel(FakeYoloModel):

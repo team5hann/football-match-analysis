@@ -16,10 +16,18 @@ from app.models.video import Video
 from app.services.pitch import pitch_xy
 from app.services.player_identity import link_map, merge_player_identities
 
-IOU_THRESHOLD = 0.15
 POSSESSION_DISTANCE = 0.2
 PITCH_LENGTH_METERS = 105.0
 PITCH_WIDTH_METERS = 68.0
+
+# A "possession spell" is only real once the same player has been the
+# nearest-to-ball for this many consecutive sampled frames. Without this the
+# nearest-player-to-ball flickers between players every frame and every flicker
+# was logged as a pass, producing tens of "passes" per second of quiet play.
+POSSESSION_CONFIRM_FRAMES = 6
+# A pass/turnover is only logged if the ball actually moved this far (metres)
+# between the two spell owners - filters out tracker id-swaps on one player.
+MIN_POSSESSION_CHANGE_METERS = 6.0
 
 
 @dataclass
@@ -38,59 +46,33 @@ def box_center(box: dict[str, float], image_width: int, image_height: int) -> tu
     )
 
 
-def iou(first: dict[str, float], second: dict[str, float]) -> float:
-    left = max(first["x"], second["x"])
-    top = max(first["y"], second["y"])
-    right = min(first["x"] + first["width"], second["x"] + second["width"])
-    bottom = min(first["y"] + first["height"], second["y"] + second["height"])
-    intersection = max(0.0, right - left) * max(0.0, bottom - top)
-    union = first["width"] * first["height"] + second["width"] * second["height"] - intersection
-    return intersection / union if union else 0.0
-
-
 def analyze_records(
     records: list[dict],
     image_width: int,
     image_height: int,
     cluster_roles: dict[int, str] | None = None,
     video_id: int | None = None,
+    possession_confirm_frames: int = POSSESSION_CONFIRM_FRAMES,
+    min_change_meters: float = MIN_POSSESSION_CHANGE_METERS,
 ) -> AnalysisResult:
     cluster_roles = cluster_roles or {}
     players_by_time: dict[float, list[dict]] = defaultdict(list)
     balls_by_time: dict[float, list[dict]] = defaultdict(list)
+    # track_id now comes from ByteTrack (assigned at detection time); analysis
+    # just consumes it. Player detections ByteTrack never bound to a track are
+    # dropped - they cannot take part in tracking-based metrics.
+    track_ids: dict[int, int] = {}
     for record in records:
-        target = players_by_time if record["class"] == "player" else balls_by_time
-        target[record["timestamp"]].append(record)
+        if record["class"] == "player":
+            if record.get("track_id") is None:
+                continue
+            players_by_time[record["timestamp"]].append(record)
+            if record.get("id") is not None:
+                track_ids[record["id"]] = record["track_id"]
+        else:
+            balls_by_time[record["timestamp"]].append(record)
 
     ordered_times = sorted(players_by_time)
-    next_track_id = 1
-    previous: list[dict] = []
-    track_ids: dict[int, int] = {}
-    for timestamp in ordered_times:
-        current = players_by_time[timestamp]
-        candidates: list[tuple[float, int, int]] = []
-        for current_index, item in enumerate(current):
-            for previous_index, old_item in enumerate(previous):
-                score = iou(item["box"], old_item["box"])
-                if item.get("cluster") is not None and old_item.get("cluster") == item["cluster"]:
-                    score += 0.1
-                if score >= IOU_THRESHOLD:
-                    candidates.append((score, current_index, previous_index))
-        matched_current: set[int] = set()
-        matched_previous: set[int] = set()
-        for _, current_index, previous_index in sorted(candidates, reverse=True):
-            if current_index in matched_current or previous_index in matched_previous:
-                continue
-            track_ids[current[current_index]["id"]] = previous[previous_index]["track_id"]
-            current[current_index]["track_id"] = previous[previous_index]["track_id"]
-            matched_current.add(current_index)
-            matched_previous.add(previous_index)
-        for current_index, item in enumerate(current):
-            if current_index not in matched_current:
-                item["track_id"] = next_track_id
-                track_ids[item["id"]] = next_track_id
-                next_track_id += 1
-        previous = current
 
     owner_by_time: dict[float, dict | None] = {}
     touch_counts: dict[int, int] = defaultdict(int)
@@ -131,26 +113,59 @@ def analyze_records(
         if distance_to_ball <= POSSESSION_DISTANCE:
             touch_counts[closest["track_id"]] += 1
 
-    events: list[dict] = []
-    previous_owner: dict | None = None
+    # --- possession spells (debounced) -----------------------------------------
+    # Collapse the per-frame owner sequence into spells; only a spell that held
+    # for POSSESSION_CONFIRM_FRAMES consecutive frames counts as real possession.
+    spells: list[dict] = []
+    current_spell: dict | None = None
     for timestamp in ordered_times:
         owner = owner_by_time[timestamp]
-        if owner and previous_owner and owner["track_id"] != previous_owner["track_id"]:
-            same_cluster = (
-                owner.get("cluster") is not None
-                and owner.get("cluster") == previous_owner.get("cluster")
-            )
-            events.append(
+        track_id = owner["track_id"] if owner else None
+        if current_spell is not None and track_id == current_spell["track_id"]:
+            current_spell["frames"] += 1
+            current_spell["last_owner"] = owner
+            current_spell["end_ts"] = timestamp
+        else:
+            if current_spell is not None and current_spell["frames"] >= possession_confirm_frames:
+                spells.append(current_spell)
+            current_spell = (
                 {
-                    "event_type": "pass" if same_cluster else "possession_loss",
-                    "timestamp_seconds": timestamp,
-                    "track_id": owner["track_id"],
-                    "video_id": video_id,
-                    "description": "Estimated from nearest-player possession change",
+                    "track_id": track_id,
+                    "cluster": owner.get("cluster"),
+                    "first_owner": owner,
+                    "last_owner": owner,
+                    "start_ts": timestamp,
+                    "end_ts": timestamp,
+                    "frames": 1,
                 }
+                if owner is not None
+                else None
             )
-        if owner:
-            previous_owner = owner
+    if current_spell is not None and current_spell["frames"] >= possession_confirm_frames:
+        spells.append(current_spell)
+
+    events: list[dict] = []
+    for previous_spell, next_spell in zip(spells, spells[1:]):
+        if previous_spell["track_id"] == next_spell["track_id"]:
+            continue
+        from_x, from_y = pitch_xy(previous_spell["last_owner"], image_width, image_height)
+        to_x, to_y = pitch_xy(next_spell["first_owner"], image_width, image_height)
+        if hypot(to_x - from_x, to_y - from_y) < min_change_meters:
+            continue  # same spot, tracker just swapped the id
+        same_cluster = (
+            previous_spell["cluster"] is not None
+            and previous_spell["cluster"] == next_spell["cluster"]
+        )
+        events.append(
+            {
+                "event_type": "pass" if same_cluster else "possession_loss",
+                "timestamp_seconds": next_spell["start_ts"],
+                "track_id": next_spell["track_id"],       # recipient / new owner
+                "sender_track_id": previous_spell["track_id"],
+                "video_id": video_id,
+                "description": "Estimated from a debounced nearest-player possession change",
+            }
+        )
 
     # TODO: shot detection needs goal/pitch geometry; do not infer it from sparse detections.
 
@@ -203,16 +218,17 @@ def run_analysis(match_id: int, session_factory=SessionLocal) -> None:
                 "cluster": item.team_color_cluster,
                 "jersey_number": item.jersey_number,
                 "pitch": (item.pitch_x, item.pitch_y),
+                # ByteTrack assigns this at detection time; analyze_records keys
+                # all tracking metrics off it, so it must be carried through.
+                "track_id": item.track_id,
             }
             for item in detections
         ]
         result = analyze_records(records, video.width or 1, video.height or 1, cluster_roles, video.id)
-        for item in detections:
-            if item.id in result.track_ids:
-                item.track_id = result.track_ids[item.id]
-        db.flush()  # persist track_ids so the identity merge sees them
+        # track_id already lives on each Detection (written by ByteTrack in the
+        # detection phase); analysis no longer re-assigns it.
 
-        # Stitch the fresh track_ids into whole-match player identities, then tag
+        # Stitch the ByteTrack track_ids into whole-match player identities, then tag
         # each per-track metric row with the identity it belongs to so callers
         # can aggregate touches/distance/etc. across a player's split tracks.
         merge_player_identities(match_id, db=db)
@@ -231,7 +247,16 @@ def run_analysis(match_id: int, session_factory=SessionLocal) -> None:
         for row in result.players:
             db.add(PlayerMetric(match_id=match_id, match_player_id=match_player_by_track.get(row["track_id"]), **row))
         for event in result.events:
-            db.add(Event(match_id=match_id, event_type=event["event_type"], timestamp_seconds=event["timestamp_seconds"], track_id=event["track_id"], video_id=event["video_id"], description=event["description"], manually_verified=False))
+            db.add(Event(
+                match_id=match_id,
+                event_type=event["event_type"],
+                timestamp_seconds=event["timestamp_seconds"],
+                track_id=event["track_id"],
+                related_track_id=event.get("sender_track_id"),  # pass/turnover origin
+                video_id=event["video_id"],
+                description=event["description"],
+                manually_verified=False,
+            ))
         summary = db.scalar(select(MatchAnalysisSummary).where(MatchAnalysisSummary.match_id == match_id))
         if summary is None:
             summary = MatchAnalysisSummary(match_id=match_id)

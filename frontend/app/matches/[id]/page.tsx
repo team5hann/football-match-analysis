@@ -3,7 +3,7 @@
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { api, ApiError, mediaUrl, type MatchDetail, type PlayerOption, type ReportFormat, type TeamClusterAssignment, type TeamClusterRole } from "@/lib/api";
+import { api, ApiError, mediaUrl, type MatchDetail, type PassAttempt, type PlayerOption, type RadarScores, type ReportFormat, type TeamClusterAssignment, type TeamClusterRole } from "@/lib/api";
 import { formatBytes, formatDate, formatDuration, resolutionLabel } from "@/lib/format";
 import StatusBadge from "@/components/StatusBadge";
 import VideoUploadPanel from "@/components/VideoUploadPanel";
@@ -26,6 +26,10 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
   const [startingAnalysis, setStartingAnalysis] = useState(false);
   const [playerStats, setPlayerStats] = useState<Awaited<ReturnType<typeof api.getPlayerStats>> | null>(null);
   const [startingPlayerStats, setStartingPlayerStats] = useState(false);
+  const [passMapPlayer, setPassMapPlayer] = useState<number | null>(null);
+  const [passMap, setPassMap] = useState<Awaited<ReturnType<typeof api.getPlayerPasses>> | null>(null);
+  const [passMapError, setPassMapError] = useState<string | null>(null);
+  const [radar, setRadar] = useState<Awaited<ReturnType<typeof api.getRadar>> | null>(null);
   const videoElement = useRef<HTMLVideoElement>(null);
   const [heatmapMode, setHeatmapMode] = useState<"team" | "player">("team");
   const [heatmapTeam, setHeatmapTeam] = useState<"home" | "away">("home");
@@ -136,6 +140,21 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
     return () => { active = false; };
   }, [matchId, analysis?.status]);
 
+  useEffect(() => {
+    let active = true;
+    api.getRadar(matchId).then((result) => { if (active) setRadar(result); }).catch(() => undefined);
+    return () => { active = false; };
+  }, [matchId, analysis?.status, playerStats]);
+
+  useEffect(() => {
+    if (passMapPlayer === null) return;
+    let active = true;
+    api.getPlayerPasses(matchId, passMapPlayer)
+      .then((result) => { if (active) { setPassMap(result); setPassMapError(null); } })
+      .catch(() => { if (active) setPassMapError("No pass data for this player"); });
+    return () => { active = false; };
+  }, [matchId, passMapPlayer]);
+
   const videoId = match?.videos[0]?.id;
   useEffect(() => {
     if (!videoId) return;
@@ -159,10 +178,6 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
       window.clearInterval(interval);
     };
   }, [videoId]);
-
-  useEffect(() => {
-    setDetectionPage(1);
-  }, [detection?.detections_count]);
 
   async function handleStartDetection() {
     if (!video) return;
@@ -315,8 +330,13 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
       <div className="mt-3 mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">
-            {match.home_team?.name ?? "Home"}{" "}
-            <span className="text-slate-500">vs</span> {match.away_team?.name ?? "Away"}
+            {match.home_team ? (
+              <Link href={`/teams/${match.home_team.id}`} className="hover:text-emerald-300">{match.home_team.name}</Link>
+            ) : "Home"}{" "}
+            <span className="text-slate-500">vs</span>{" "}
+            {match.away_team ? (
+              <Link href={`/teams/${match.away_team.id}`} className="hover:text-emerald-300">{match.away_team.name}</Link>
+            ) : "Away"}
           </h1>
           <p className="text-sm text-slate-400">
             {match.name ? `${match.name} · ` : ""}
@@ -836,7 +856,7 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
                         <th className="pb-2 font-medium">Player</th>
                         <th className="pb-2 font-medium">Touches</th>
                         <th className="pb-2 font-medium">Distance</th>
-                        <th className="pb-2 font-medium">Passes (short/long)</th>
+                        <th className="pb-2 font-medium">Passes (cmp / total · %)</th>
                         <th className="pb-2 font-medium">Shots (xG)</th>
                         <th className="pb-2 font-medium">Duels</th>
                         <th className="pb-2 font-medium">Dribbles</th>
@@ -857,8 +877,11 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
                             <td className="py-2">{player.touches}</td>
                             <td className="py-2">{player.distance_meters.toFixed(1)} m</td>
                             <td className="py-2">
-                              {player.passes_completed}/{player.passes_total}
-                              <span className="text-slate-500"> ({player.passes_short}/{player.passes_long})</span>
+                              <div className="flex flex-col gap-0.5 leading-tight">
+                                <PassLine label="Total" done={player.passes_completed} total={player.passes_total} />
+                                <PassLine label="Short" done={player.passes_short_completed} total={player.passes_short} />
+                                <PassLine label="Long" done={player.passes_long_completed} total={player.passes_long} />
+                              </div>
                             </td>
                             <td className="py-2">{player.shots}<span className="text-slate-500"> ({player.xg.toFixed(2)})</span></td>
                             <td className="py-2">{player.duels_won}/{player.duels_total}</td>
@@ -874,6 +897,96 @@ export default function MatchDetailPage({ params }: PageProps<"/matches/[id]">) 
                     ? "Run \"Compute advanced stats\" to populate this table."
                     : "Analyze the match first."}
                 </p>
+              )}
+            </Accordion>
+          </section>
+
+          <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
+            <Accordion
+              title="Pass map"
+              summary="A player's pass attempts as arrows — green completed, red lost"
+              actions={(
+                <select
+                  value={passMapPlayer ?? ""}
+                  onChange={(event) => setPassMapPlayer(event.target.value ? Number(event.target.value) : null)}
+                  className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-200"
+                >
+                  <option value="">Select player</option>
+                  {(["home", "away"] as const).map((role) => {
+                    const players = (playerStats?.players ?? []).filter(
+                      (p) => p.team_role === role && p.passes_total > 0,
+                    );
+                    if (players.length === 0) return null;
+                    return (
+                      <optgroup key={role} label={role[0].toUpperCase() + role.slice(1)}>
+                        {players
+                          .sort((a, b) => b.passes_total - a.passes_total)
+                          .map((p) => (
+                            <option key={p.match_player_id} value={p.match_player_id}>
+                              {p.label} ({p.passes_completed}/{p.passes_total})
+                            </option>
+                          ))}
+                      </optgroup>
+                    );
+                  })}
+                </select>
+              )}
+            >
+              {passMapError && <p className="mt-3 text-sm text-amber-300">{passMapError}</p>}
+              {!playerStats && <p className="mt-3 text-sm text-slate-500">Run &quot;Compute advanced stats&quot; first.</p>}
+              {passMap && passMap.match_player_id === passMapPlayer ? (
+                <>
+                  <div className="mt-4 flex flex-wrap gap-3 text-sm text-slate-300">
+                    <span>{passMap.label}</span>
+                    <span className="text-emerald-400">● {passMap.completed} completed</span>
+                    <span className="text-red-400">● {passMap.failed} lost</span>
+                    <span className="text-slate-500">{passMap.short} short / {passMap.long} long</span>
+                  </div>
+                  <PassMapPitch passes={passMap.passes} />
+                  <p className="mt-2 text-xs text-slate-500">{passMap.note}</p>
+                </>
+              ) : (
+                playerStats && !passMapError && (
+                  <p className="mt-3 text-sm text-slate-500">Pick a player to draw their pass map.</p>
+                )
+              )}
+            </Accordion>
+          </section>
+
+          <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
+            <Accordion
+              title="Team performance radar"
+              summary="Five 0–10 axes for Home and Away — Pressing & Transitions are rough approximations"
+            >
+              {radar ? (
+                <>
+                  <div className="mt-4 flex flex-col items-center gap-4 lg:flex-row lg:items-start">
+                    <RadarChart home={radar.home.scores} away={radar.away.scores} />
+                    <div className="w-full text-sm">
+                      <table className="w-full text-left">
+                        <thead className="text-xs uppercase tracking-wide text-slate-500">
+                          <tr><th className="pb-2 font-medium">Axis</th><th className="pb-2 font-medium text-emerald-400">Home</th><th className="pb-2 font-medium text-sky-400">Away</th></tr>
+                        </thead>
+                        <tbody>
+                          {(["attack", "passing", "defence", "pressing", "transitions"] as const).map((axis) => (
+                            <tr key={axis} className="border-t border-slate-800 text-slate-300">
+                              <td className="py-2 capitalize">{axis}</td>
+                              <td className="py-2">{radar.home.scores[axis].toFixed(1)}</td>
+                              <td className="py-2">{radar.away.scores[axis].toFixed(1)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                  <ul className="mt-4 space-y-1 text-xs text-slate-500">
+                    {(["attack", "passing", "defence", "pressing", "transitions"] as const).map((axis) => (
+                      <li key={axis}><span className="capitalize text-slate-400">{axis}:</span> {radar.notes[axis]}</li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
+                <p className="mt-3 text-sm text-slate-500">Analyze the match and compute advanced stats to see the radar.</p>
               )}
             </Accordion>
           </section>
@@ -947,6 +1060,114 @@ function Accordion({
 
 function clipLabel(eventType: "shot" | "pass" | "possession_loss") {
   return eventType === "shot" ? "Shot" : eventType === "pass" ? "Pass" : "Possession loss";
+}
+
+const PITCH_CLAMP = (value: number, max: number) => Math.min(max, Math.max(0, value));
+
+const RADAR_AXES = ["attack", "passing", "defence", "pressing", "transitions"] as const;
+
+function RadarChart({ home, away }: { home: RadarScores; away: RadarScores }) {
+  const axes = RADAR_AXES;
+  const cx = 150;
+  const cy = 140;
+  const radius = 100;
+  const point = (index: number, value: number) => {
+    const angle = -Math.PI / 2 + (index * 2 * Math.PI) / axes.length;
+    const r = (Math.max(0, Math.min(10, value)) / 10) * radius;
+    return [cx + r * Math.cos(angle), cy + r * Math.sin(angle)] as const;
+  };
+  const polygon = (scores: RadarScores) =>
+    axes.map((axis, index) => point(index, scores[axis]).join(",")).join(" ");
+
+  return (
+    <svg viewBox="0 0 300 300" className="w-full max-w-sm" role="img" aria-label="Team performance radar">
+      {[2, 4, 6, 8, 10].map((ring) => (
+        <polygon
+          key={ring}
+          points={axes.map((_, index) => point(index, ring).join(",")).join(" ")}
+          fill="none"
+          stroke="#334155"
+          strokeWidth="0.6"
+        />
+      ))}
+      {axes.map((axis, index) => {
+        const [x, y] = point(index, 10);
+        const [lx, ly] = point(index, 12.2);
+        return (
+          <g key={axis}>
+            <line x1={cx} y1={cy} x2={x} y2={y} stroke="#334155" strokeWidth="0.6" />
+            <text x={lx} y={ly} textAnchor="middle" fontSize="10" fill="#94a3b8" className="capitalize">
+              {axis}
+            </text>
+          </g>
+        );
+      })}
+      <polygon points={polygon(away)} fill="#38bdf833" stroke="#38bdf8" strokeWidth="1.5" />
+      <polygon points={polygon(home)} fill="#10b98133" stroke="#10b981" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function PassMapPitch({ passes }: { passes: PassAttempt[] }) {
+  return (
+    <svg
+      viewBox="0 0 105 68"
+      className="mt-4 aspect-[105/68] w-full max-w-3xl rounded-sm border border-emerald-950 bg-emerald-700"
+      role="img"
+      aria-label="Pass map on a standardised pitch"
+    >
+      <defs>
+        <pattern id="passmap-stripes" width="14" height="68" patternUnits="userSpaceOnUse">
+          <rect width="7" height="68" fill="#15803d" />
+          <rect x="7" width="7" height="68" fill="#166534" />
+        </pattern>
+        <marker id="arrow-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="#10b981" />
+        </marker>
+        <marker id="arrow-red" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="#ef4444" />
+        </marker>
+      </defs>
+      <rect width="105" height="68" fill="url(#passmap-stripes)" />
+      <rect x="2" y="2" width="101" height="64" fill="none" stroke="#f8fafc" strokeWidth="0.7" />
+      <line x1="52.5" y1="2" x2="52.5" y2="66" stroke="#f8fafc" strokeWidth="0.55" />
+      <circle cx="52.5" cy="34" r="9.15" fill="none" stroke="#f8fafc" strokeWidth="0.55" />
+      <rect x="2" y="13.84" width="16.5" height="40.32" fill="none" stroke="#f8fafc" strokeWidth="0.55" />
+      <rect x="86.5" y="13.84" width="16.5" height="40.32" fill="none" stroke="#f8fafc" strokeWidth="0.55" />
+      {passes.map((pass, index) => {
+        const x1 = PITCH_CLAMP(pass.start_x, 105);
+        const y1 = PITCH_CLAMP(pass.start_y, 68);
+        const x2 = PITCH_CLAMP(pass.end_x, 105);
+        const y2 = PITCH_CLAMP(pass.end_y, 68);
+        const color = pass.completed ? "#10b981" : "#ef4444";
+        return (
+          <g key={index}>
+            <line
+              x1={x1}
+              y1={y1}
+              x2={x2}
+              y2={y2}
+              stroke={color}
+              strokeWidth={pass.completed ? 0.7 : 0.9}
+              strokeOpacity="0.85"
+              markerEnd={`url(#${pass.completed ? "arrow-green" : "arrow-red"})`}
+            />
+            <circle cx={x1} cy={y1} r="0.9" fill={color} />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function PassLine({ label, done, total }: { label: string; done: number; total: number }) {
+  const pct = total > 0 ? `${((done / total) * 100).toFixed(1)}%` : "N/A";
+  return (
+    <span>
+      <span className="text-slate-500">{label}:</span> {done}/{total}{" "}
+      <span className={total > 0 ? "text-slate-400" : "text-slate-600"}>({pct})</span>
+    </span>
+  );
 }
 
 function Stat({ label, value }: { label: string; value: string }) {
