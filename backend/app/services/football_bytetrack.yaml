@@ -1,0 +1,15 @@
+# ByteTrack tuned for football players (Ultralytics tracker config).
+# Differences from Ultralytics' default bytetrack.yaml and why:
+# - track_high_thresh 0.5 -> 0.4: partly occluded players in a duel score lower
+#   but should still match their existing track in the first association pass.
+# - new_track_thresh 0.6 -> 0.65: do not start new identities from weak boxes
+#   (spectators, coaches on the touchline), which would fragment the roster.
+# - track_buffer 30 -> 90: at 30 sampled fps keep a lost player's track for ~3 s,
+#   enough to survive a player passing behind another or a short camera pan.
+tracker_type: bytetrack
+track_high_thresh: 0.4
+track_low_thresh: 0.1
+new_track_thresh: 0.65
+track_buffer: 90
+match_thresh: 0.8
+fuse_score: True

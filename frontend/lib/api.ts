@@ -21,6 +21,7 @@ export interface Detection {
   dominant_rgb: number[] | null;
   jersey_number: number | null;
   jersey_number_confidence: number | null;
+  is_interpolated: boolean;
   created_at: string;
 }
 

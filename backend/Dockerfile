@@ -30,6 +30,10 @@ hf_hub_download('martinjolif/yolo-football-pitch-detection', 'yolo-football-pitc
 local_dir='/app/models')" && \
     mv /app/models/yolo-football-pitch-detection.pt /app/models/football-pitch-detection.pt
 
+# Player detector (YOLO11 medium, COCO person class). Downloaded at build time so
+# the first analysis does not stall on it; PLAYER_MODEL overrides the choice.
+RUN python -c "from ultralytics import YOLO; YOLO('yolo11m.pt')"
+
 RUN mkdir -p /app/storage/videos
 
 EXPOSE 8000

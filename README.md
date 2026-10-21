@@ -15,7 +15,7 @@ possession, movement estimates, and basic pass/loss events.
 - **Frontend**: Next.js (App Router, TypeScript, Tailwind CSS)
 - **Video processing**: FFmpeg / ffprobe, Ultralytics YOLOv8, EasyOCR (CPU)
 
-Detection uses the general `yolov8n.pt` model for players and the football-specific
+Detection uses the general `yolo11m.pt` model (configurable via `PLAYER_MODEL`) for players and the football-specific
 `football-ball-detection.pt` model from [Football-PitchVision](https://github.com/DesusLove/Football-PitchVision)
 for balls. The ball weights are downloaded from the project's public Google Drive
 asset during the backend Docker build into `backend/models/`; they are not committed
@@ -68,6 +68,21 @@ docker compose up --build
 
 Uploaded videos persist in the `video_storage` Docker volume; Postgres data in
 `postgres_data`.
+
+### Detection quality
+
+- **Players**: YOLO11m at 1280 px input (`PLAYER_MODEL`, `PLAYER_IMGSZ`), tracked with a
+  football-tuned ByteTrack config (`backend/app/services/football_bytetrack.yaml`) that keeps a
+  player's identity through ~3 s of occlusion.
+- **Ball**: the specialised ball model runs at 1280 px on the full frame *and* on a 2x2 grid of
+  overlapping tiles (`BALL_IMGSZ`, `BALL_TILE_GRID`; 1 disables tiling), so a small or blurred
+  ball in flight is still found. A low threshold (`BALL_CONFIDENCE=0.05`) maximises recall; the
+  trajectory filter in `backend/app/services/ball_tracking.py` then keeps exactly one ball per
+  frame on a physically plausible path, drops false positives (heads, socks, pitch markings)
+  and linearly interpolates gaps up to `BALL_MAX_GAP_SECONDS` (0.5 s). Interpolated ball boxes
+  have `is_interpolated = true` and confidence 0.
+- Tiling costs 5 ball-model runs per frame. On a small GPU use `BALL_TILE_GRID=1` or
+  `PLAYER_MODEL=yolo11s.pt` to trade accuracy for speed.
 
 Detection sampling defaults to approximately 30 FPS (`0.033` seconds). Override it with the
 `DETECTION_SAMPLE_INTERVAL_SECONDS` environment variable, for example

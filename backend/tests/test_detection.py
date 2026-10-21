@@ -59,6 +59,14 @@ def test_detection_stores_specialized_ball_detections(client, tmp_path):
 
     detections = client.get(f"/api/videos/{response.json()['id']}/detection").json()["detections"]
     assert {detection["class"] for detection in detections} == {"player", "ball"}
+    balls = [detection for detection in detections if detection["class"] == "ball"]
+    players = [detection for detection in detections if detection["class"] == "player"]
+    # Exactly one ball per sampled frame, always the real one (the jumping
+    # false positive is rejected by the trajectory filter).
+    assert len(balls) == len(players)
+    assert len({ball["frame_timestamp"] for ball in balls}) == len(balls)
+    assert all(ball["bounding_box"] == {"x": 120.0, "y": 80.0, "width": 8.0, "height": 8.0} for ball in balls)
+    assert not any(ball["is_interpolated"] for ball in balls)
 
 
 class FakeTensor:
@@ -110,7 +118,34 @@ class FakeYoloModel:
 
 
 class FakeBallYoloModel(FakeYoloModel):
+    """The ball model now receives decoded images (full frame + tiles). It
+    reports the ball only on the full 320x240 frame, plus a weak false positive
+    that jumps around and must be filtered out by the trajectory cleaner."""
+
     box = ([120, 80, 128, 88], 0.87, 0)
+
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, source, verbose: bool = False, **kwargs):
+        results = []
+        for image in source:
+            if image.shape[:2] == (240, 320):
+                self.calls += 1
+                noise_x = 20 + (self.calls * 97) % 260
+                results.append(
+                    SimpleNamespace(
+                        boxes=SimpleNamespace(
+                            xyxy=FakeTensor([self.box[0], [noise_x, 200, noise_x + 6, 206]]),
+                            conf=FakeTensor([self.box[1], 0.08]),
+                            cls=FakeTensor([0, 0]),
+                            id=None,
+                        )
+                    )
+                )
+            else:
+                results.append(SimpleNamespace(boxes=None))
+        return results
 
 
 def _make_test_video(tmp_path: Path) -> Path:

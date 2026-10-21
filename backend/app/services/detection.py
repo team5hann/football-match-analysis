@@ -20,6 +20,8 @@ from app.models.homography import FrameHomography
 from app.models.player_identity import MatchPlayer, TrackPlayerLink
 from app.models.player_stats import MatchPlayerStats
 from app.models.video import Video
+from app.services.ball_detection import detect_ball_candidates
+from app.services.ball_tracking import clean_ball_trajectory
 
 settings = get_settings()
 PERSON_CLASS_ID = 0
@@ -31,7 +33,9 @@ BALL_CLASS_ID = 0
 # matching in analysis.py. ByteTrack keeps a Kalman motion model per track and
 # recovers it across short detection gaps, so one real player stays one track_id
 # far more often - which in turn feeds cleaner identity merging downstream.
-TRACKER_CONFIG = "bytetrack.yaml"
+# The config is a football-tuned copy of Ultralytics' bytetrack.yaml (longer
+# track buffer for occlusions, stricter new-track threshold); see the file.
+TRACKER_CONFIG = str(Path(__file__).resolve().parent / "football_bytetrack.yaml")
 
 # Number of frames sent to YOLO in a single inference call. Batching keeps the
 # GPU busy between frames and is the main speed-up over one-frame-at-a-time.
@@ -154,6 +158,7 @@ def run_detection(video_id: int, model=None, ball_model=None, session_factory=Se
         return
 
     file_path = video.file_path
+    video_width = video.width
 
     try:
         video.status = VideoStatus.PROCESSING
@@ -178,7 +183,7 @@ def run_detection(video_id: int, model=None, ball_model=None, session_factory=Se
         if model is None:
             from ultralytics import YOLO
 
-            model = YOLO("yolov8n.pt")
+            model = YOLO(settings.player_model)
             ball_model = YOLO(str(BALL_MODEL_PATH))
             model.to(device)
             ball_model.to(device)
@@ -224,6 +229,7 @@ def run_detection(video_id: int, model=None, ball_model=None, session_factory=Se
                 persist=True,
                 tracker=TRACKER_CONFIG,
                 classes=[PERSON_CLASS_ID],
+                imgsz=settings.player_imgsz,
                 device=device,
                 half=player_half,
                 verbose=False,
@@ -255,27 +261,56 @@ def run_detection(video_id: int, model=None, ball_model=None, session_factory=Se
             del player_stream
             _release_predictor_gpu(model, device)
 
-            # --- ball: plain batched detection --------------------------------
+            # --- ball: full frame + tiles, then trajectory cleaning -----------
+            # Candidates are tiny (a few per frame), so the whole match fits in
+            # memory; the trajectory filter needs them all to pick one ball per
+            # frame and interpolate short gaps.
             if ball_model is not None:
-                batch_size = DETECTION_BATCH_SIZE
-                base = 0
-                while base < len(frame_paths):
-                    batch_paths = frame_paths[base : base + batch_size]
-                    try:
-                        ball_results = ball_model(batch_paths, device=device, half=ball_half, verbose=False)
-                    except Exception as exc:  # noqa: BLE001 - narrow to CUDA OOM below
-                        if _is_cuda_oom(exc) and batch_size > 1:
-                            batch_size = max(1, batch_size // 2)
-                            _empty_cuda_cache(device)
-                            print(f"[detection] CUDA out of memory, retrying with batch size {batch_size}", flush=True)
-                            continue
-                        raise
-                    for offset, result in enumerate(ball_results):
-                        pending.extend(
-                            _result_rows(video_id, base + offset, sample_interval, result, BALL_CLASS_ID, "ball")
-                        )
-                    base += len(batch_paths)
-                    del ball_results
+
+                def infer(images: list) -> list:
+                    return ball_model(
+                        images,
+                        device=device,
+                        half=ball_half,
+                        imgsz=settings.ball_imgsz,
+                        conf=settings.ball_confidence,
+                        verbose=False,
+                    )
+
+                def on_oom(exc: Exception, batch_size: int) -> int | None:
+                    if not _is_cuda_oom(exc) or batch_size <= 1:
+                        return None
+                    _empty_cuda_cache(device)
+                    smaller = max(1, batch_size // 2)
+                    print(f"[detection] CUDA out of memory, retrying with batch size {smaller}", flush=True)
+                    return smaller
+
+                candidates = []
+                for frame_candidates in detect_ball_candidates(
+                    infer,
+                    frame_paths,
+                    class_id=BALL_CLASS_ID,
+                    tile_grid=settings.ball_tile_grid,
+                    batch_size=DETECTION_BATCH_SIZE,
+                    on_oom=on_oom,
+                ):
+                    candidates.extend(frame_candidates)
+                trajectory = clean_ball_trajectory(
+                    candidates,
+                    frame_width=video_width or _frame_width(frame_paths),
+                    max_gap_frames=int(settings.ball_max_gap_seconds / sample_interval),
+                )
+                print(
+                    f"[detection] ball: {len(candidates)} candidates -> "
+                    f"{sum(not p.interpolated for p in trajectory)} on trajectory, "
+                    f"{sum(p.interpolated for p in trajectory)} interpolated, "
+                    f"{len(frame_paths)} frames",
+                    flush=True,
+                )
+                for start in range(0, len(trajectory), DETECTION_FLUSH_ROWS):
+                    pending.extend(
+                        _ball_rows(video_id, sample_interval, trajectory[start : start + DETECTION_FLUSH_ROWS])
+                    )
                     flush()
                 flush(force=True)
 
@@ -364,6 +399,34 @@ def _result_rows(
             }
         )
     return rows
+
+
+def _frame_width(frame_paths: list[str]) -> int:
+    import cv2
+
+    image = cv2.imread(frame_paths[0]) if frame_paths else None
+    return image.shape[1] if image is not None else 1920
+
+
+def _ball_rows(video_id: int, sample_interval: float, trajectory) -> list[dict]:
+    return [
+        {
+            "video_id": video_id,
+            "frame_timestamp": round(point.frame * sample_interval, 6),
+            "bounding_box": {
+                "x": round(point.x1, 3),
+                "y": round(point.y1, 3),
+                "width": round(point.x2 - point.x1, 3),
+                "height": round(point.y2 - point.y1, 3),
+            },
+            "class_name": "ball",
+            "confidence": round(point.confidence, 4),
+            "track_id": None,
+            "is_interpolated": point.interpolated,
+        }
+        for point in trajectory
+        if all(math.isfinite(value) for value in (point.x1, point.y1, point.x2, point.y2, point.confidence))
+    ]
 
 
 def list_detections(video_id: int, db: Session) -> list[Detection]:

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, JSON, String, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, JSON, String, func, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -24,6 +24,9 @@ class Detection(Base):
     # homography. Null when no homography was available for the frame.
     pitch_x: Mapped[float | None] = mapped_column(Float, nullable=True)
     pitch_y: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Ball boxes filled in by trajectory interpolation where the detector missed
+    # the ball (fast flight, occlusion); confidence is 0 for these.
+    is_interpolated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     video: Mapped["Video"] = relationship(back_populates="detections")

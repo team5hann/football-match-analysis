@@ -17,6 +17,7 @@ class DetectionRead(BaseModel):
     dominant_rgb: list[int] | None = None
     jersey_number: int | None = None
     jersey_number_confidence: float | None = None
+    is_interpolated: bool = False
     created_at: datetime
 
 
