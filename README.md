@@ -15,11 +15,25 @@ possession, movement estimates, and basic pass/loss events.
 - **Frontend**: Next.js (App Router, TypeScript, Tailwind CSS)
 - **Video processing**: FFmpeg / ffprobe, Ultralytics YOLOv8, EasyOCR (CPU)
 
-Detection uses the general `yolov8n.pt` model for players and the football-specific
-`football-ball-detection.pt` model from [Football-PitchVision](https://github.com/DesusLove/Football-PitchVision)
-for balls. The ball weights are downloaded from the project's public Google Drive
-asset during the backend Docker build into `backend/models/`; they are not committed
-to this repository. The upstream README identifies the YOLO weights as AGPL-3.0.
+Detection uses two football-specific YOLOv8 models from
+[roboflow/sports](https://github.com/roboflow/sports) (also used by
+[Football-PitchVision](https://github.com/DesusLove/Football-PitchVision)):
+
+- `football-player-detection.pt` for players, goalkeepers and referees, run at
+  1280 px. Goalkeepers are stored as `player`, referees as `referee` (so they no
+  longer pollute possession, tracking and identity stitching). If the file is
+  missing, detection falls back to the generic `yolov8n.pt` person class.
+- `football-ball-detection.pt` for the ball, run on overlapping 640 px tiles of
+  each frame (the ball is only a few pixels on a full frame). Only the single most
+  plausible ball per frame is stored: the most confident candidate near the
+  previous ball, otherwise the most confident overall.
+
+Both weights are downloaded from the project's public Google Drive assets during the
+backend Docker build into `backend/models/`; they are not committed to this
+repository. The upstream README identifies the YOLO weights as AGPL-3.0.
+
+Sampling never runs faster than the video's own frame rate (from ffprobe): asking
+for 60 fps on a 30 fps file would only duplicate frames.
 
 ## Project structure
 

@@ -14,7 +14,7 @@ export interface Detection {
   video_id: number;
   frame_timestamp: number;
   bounding_box: { x: number; y: number; width: number; height: number };
-  class: "player" | "ball";
+  class: "player" | "ball" | "referee";
   confidence: number;
   track_id: number | null;
   team_color_cluster: number | null;

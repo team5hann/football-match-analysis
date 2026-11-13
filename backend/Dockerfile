@@ -19,7 +19,12 @@ COPY . .
 
 RUN mkdir -p /app/models && \
     gdown --id 1isw4wx-MK9h9LMr36VvIWlJD6ppUvw7V \
-    -O /app/models/football-ball-detection.pt
+    -O /app/models/football-ball-detection.pt && \
+    gdown --id 17PXFNlx-jI7VjVo_vQnB1sONjRyvoB-q \
+    -O /app/models/football-player-detection.pt
+# ^ Both from roboflow/sports examples/soccer/setup.sh (AGPL-3.0). The player
+#   model detects players, goalkeepers and referees; if it is missing the
+#   backend falls back to generic yolov8n.
 
 # Pitch keypoint model: fine-tuned YOLOv8x-pose, 32 pitch keypoints, from
 # https://huggingface.co/martinjolif/yolo-football-pitch-detection (AGPL-3.0).

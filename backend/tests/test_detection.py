@@ -1,7 +1,15 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.services.detection import run_detection
+from app.services.detection import (
+    FOOTBALL_PLAYER_CLASS_MAP,
+    _ball_candidates,
+    _result_rows,
+    ball_tiles,
+    effective_sample_interval,
+    run_detection,
+    select_ball,
+)
 
 
 def test_detection_status_endpoint_returns_string_status(client):
@@ -36,7 +44,9 @@ def test_detection_stores_player_detections(client, tmp_path):
     assert body["detections_count"] >= 1
     assert body["detections"][0]["class"] == "player"
     assert body["detections"][0]["bounding_box"] == {"x": 10.0, "y": 20.0, "width": 50.0, "height": 80.0}
-    assert body["detections"][1]["frame_timestamp"] == 0.033
+    # The test clip is 10 fps, so the ~30 fps default is capped at the source
+    # rate instead of duplicating frames.
+    assert body["detections"][1]["frame_timestamp"] == 0.1
     # track_id now comes straight from the (fake) ByteTrack stream
     assert body["detections"][0]["track_id"] == 1
 
@@ -105,12 +115,63 @@ class FakeYoloModel:
             yield _fake_result(self.box, track_id=1)
 
     def __call__(self, source, verbose: bool = False, **kwargs):
-        paths = source if isinstance(source, list) else [source]
-        return [_fake_result(self.box) for frame_path in paths if Path(frame_path).suffix == ".jpg"]
+        items = source if isinstance(source, list) else [source]
+        return [_fake_result(self.box) for _item in items]
 
 
 class FakeBallYoloModel(FakeYoloModel):
+    # The ball model now receives in-memory tile crops, one result per tile.
     box = ([120, 80, 128, 88], 0.87, 0)
+
+
+def test_effective_sample_interval_caps_at_video_fps():
+    assert effective_sample_interval(0.033, 25.0) == 0.04
+    assert effective_sample_interval(0.0167, 60.0) == 0.0167
+    assert effective_sample_interval(0.2, 30.0) == 0.2
+    assert effective_sample_interval(0.033, None) == 0.033
+
+
+def test_ball_tiles_cover_full_hd_frame():
+    tiles = ball_tiles(1920, 1080)
+    assert all(x1 - x0 == 640 and y1 - y0 == 640 for x0, y0, x1, y1 in tiles)
+    assert max(x1 for _, _, x1, _ in tiles) == 1920
+    assert max(y1 for _, _, _, y1 in tiles) == 1080
+    assert {(x0, y0) for x0, y0, _, _ in tiles} >= {(0, 0), (1280, 440)}
+    # Frames smaller than a tile become a single tile.
+    assert ball_tiles(320, 240) == [(0, 0, 320, 240)]
+
+
+def test_select_ball_prefers_candidate_near_previous_ball():
+    near = ([100, 100, 110, 110], 0.4)
+    far_but_confident = ([900, 500, 910, 510], 0.9)
+    assert select_ball([near, far_but_confident], previous_center=(104, 104)) == near
+    # Without history (or if nothing is near) the most confident wins.
+    assert select_ball([near, far_but_confident], previous_center=None) == far_but_confident
+    assert select_ball([far_but_confident], previous_center=(104, 104)) == far_but_confident
+    assert select_ball([([0, 0, float("nan"), 1], 0.9)], previous_center=None) is None
+
+
+def test_ball_candidates_shift_tile_boxes_to_frame_coordinates():
+    tiles = [(0, 0, 640, 640), (512, 440, 1152, 1080)]
+    results = [_fake_result(([10, 10, 20, 20], 0.5, 0)), _fake_result(([10, 10, 20, 20], 0.7, 0))]
+    assert _ball_candidates(results, tiles) == [
+        ([10, 10, 20, 20], 0.5),
+        ([522, 450, 532, 460], 0.7),
+    ]
+
+
+def test_result_rows_maps_football_classes_and_drops_others():
+    result = SimpleNamespace(
+        boxes=SimpleNamespace(
+            xyxy=FakeTensor([[0, 0, 10, 20], [5, 5, 15, 25], [1, 1, 3, 3], [2, 2, 12, 22]]),
+            conf=FakeTensor([0.9, 0.8, 0.7, 0.6]),
+            cls=FakeTensor([2, 1, 0, 3]),  # player, goalkeeper, ball, referee
+            id=FakeTensor([1, 2, 3, 4]),
+        )
+    )
+    rows = _result_rows(1, 0, 0.1, result, FOOTBALL_PLAYER_CLASS_MAP)
+    assert [row["class_name"] for row in rows] == ["player", "player", "referee"]
+    assert [row["track_id"] for row in rows] == [1, 2, 4]
 
 
 def _make_test_video(tmp_path: Path) -> Path:
