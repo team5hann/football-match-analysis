@@ -7,6 +7,10 @@
 }
 
 :root {
+  /* Self-hosted font families (see app/layout.tsx). */
+  --font-inter: "Inter Variable";
+  --font-space-grotesk: "Space Grotesk Variable";
+  --font-plex-mono: "IBM Plex Mono";
   --color-bg: #17191d;
   --color-surface: #1d2025;
   --color-surface-raised: #24272d;
