@@ -8,8 +8,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# torch + torchvision (with their CUDA libraries) are several GB. They get their
+# own layer, installed before requirements.txt is even copied, so:
+#   - editing requirements.txt never re-downloads them, and
+#   - a failed/corrupted download of the small packages doesn't throw torch away.
+# Retries + a longer timeout make slow or flaky connections survive; a truncated
+# download shows up as "THESE PACKAGES DO NOT MATCH THE HASHES" and is retried.
+# Keep these versions in sync with requirements.txt.
+RUN pip install --no-cache-dir --retries 10 --timeout 120 \
+    torch==2.5.1 torchvision==0.20.1
+
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --retries 10 --timeout 120 -r requirements.txt
 
 # ByteTrack (used by Ultralytics model.track) needs the linear-assignment solver.
 # Kept as its own layer so it doesn't bust the big requirements/torch cache.
